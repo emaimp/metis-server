@@ -151,3 +151,55 @@ def generate_file_name(content: str, instruction: str = '') -> dict:
     )
 
     return json.loads(response.message.content)
+
+
+def generate_category(
+    name: str,
+    content: str = '',
+    existing_categories: list[str] | None = None,
+) -> dict:
+    """
+    Asks the model for a category (topic/type) for a given document.
+
+    Args:
+        name: The file name (without extension) of the document.
+        content: Optional content of the document to help classify it.
+        existing_categories: Optional categories already detected so the model
+            can reuse them instead of inventing new ones.
+    """
+    effective = _current_model.get() or resolve_model(None)
+
+    system = (
+        'You are a document classifier. Analyze the content of the document '
+        'and determine its category (topic/type). '
+        'Respond ONLY in JSON with the field "category": a SINGLE WORD, '
+        'without extension, spaces, or underscores. Always use the same, '
+        'consistent category across documents. '
+        "Never respond 'unknown' or 'uncategorized': always pick the closest "
+        'meaningful topic based on the content. The file name is only a hint.'
+    )
+    if existing_categories:
+        system += (
+            ' Prefer reusing one of these existing categories (case-insensitive) '
+            'when it fits; only propose a new one if none matches: '
+            f"{', '.join(existing_categories)}."
+        )
+
+    user = f'File name: {name}\n'
+    if content:
+        user += f'Content:\n{content}\n'
+    else:
+        user += 'No content provided; classify based on the file name only.'
+
+    response = chat(
+        model=effective,
+        messages=[
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': user},
+        ],
+        format='json',
+        think=False,
+        stream=False,
+    )
+
+    return json.loads(response.message.content)

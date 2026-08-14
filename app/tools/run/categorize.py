@@ -1,0 +1,91 @@
+import re
+import shutil
+from pathlib import Path
+
+from app.ai.ollama import generate_category
+from app.core.settings import MAX_CATEGORY_LENGTH, TOOL_BY_EXTENSION
+from app.tools import available_tools
+
+
+def _sanitize_category(name: str) -> str:
+    """
+    Cleans the suggested category so it is valid as a folder name.
+    Keeps only the first word.
+    """
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', name)
+    name = re.sub(r'\s+', '_', name)
+    name = name.strip(' _.')
+    name = re.split(r'[\s_]+', name, maxsplit=1)[0]
+    name = name[:MAX_CATEGORY_LENGTH].rstrip('_. ')
+    return name.lower() or 'uncategorized'
+
+
+def _unique_dest(dest: Path) -> Path:
+    """
+    Returns a destination path that does not collide with an existing file.
+    """
+    if not dest.exists():
+        return dest
+    stem, suffix = dest.stem, dest.suffix
+    for i in range(1, 10000):
+        candidate = dest.with_name(f'{stem}_{i}{suffix}')
+        if not candidate.exists():
+            return candidate
+    return dest.with_name(f'{stem}_{abs(hash(dest))}{suffix}')
+
+
+def categorize_file(file_path: str) -> str:
+    """
+    Classifies a single document and moves it into a dedicated folder named
+    after its category, created next to the file.
+
+    The document content is always analyzed; the file name is only used as
+    an additional hint for the model.
+
+    Supported formats: .txt, .pdf, .docx (via TOOL_BY_EXTENSION).
+
+    Args:
+        file_path: The path to the document to categorize.
+
+    Returns:
+        The category (folder name) on success, or an 'Error: ...' string.
+    """
+    path = Path(file_path)
+    if not path.exists() or not path.is_file():
+        return f"Error: The file '{file_path}' does not exist."
+
+    ext = path.suffix.lower()
+    if ext not in TOOL_BY_EXTENSION:
+        return f"Error: Unsupported file extension '{ext}' for categorization."
+
+    stem = path.stem
+    reader = available_tools.get(TOOL_BY_EXTENSION[ext])
+    content = reader(str(path))
+    if content.startswith('Error'):
+        return content
+
+    existing = sorted(
+        d.name for d in path.parent.iterdir() if d.is_dir()
+    )
+
+    try:
+        data = generate_category(stem, content, existing_categories=existing)
+    except Exception as e:
+        return f'Error generating the category: {str(e)}'
+
+    category = data.get('category', '')
+    if not isinstance(category, str) or not category.strip():
+        return 'Error: Could not generate a category.'
+
+    category = _sanitize_category(category)
+
+    folder = next(
+        (d for d in existing if d.lower() == category), category
+    )
+    destination_dir = path.parent / folder
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    destination = _unique_dest(destination_dir / path.name)
+    shutil.move(str(path), str(destination))
+
+    return category

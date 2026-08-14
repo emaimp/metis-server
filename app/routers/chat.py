@@ -8,12 +8,14 @@ from starlette.concurrency import run_in_threadpool
 from app.ai.ollama import ask_chat, resolve_model
 from app.core.settings import ALLOWED_EXTENSIONS, TOOL_BY_EXTENSION
 from app.tools import available_tools
+from app.tools.run.categorize import categorize_file
 from app.tools.run.naming import rename_file
 from app.utils.language import detect_language, language_instruction
 
 router = APIRouter(prefix='/chat', tags=['chat'])
 
 RENAME_MENTION_PATTERN = re.compile(r'@tool_rename\b', re.IGNORECASE)
+CATEGORIZE_MENTION_PATTERN = re.compile(r'@tool_categorize\b', re.IGNORECASE)
 UNKNOWN_TOOL_PATTERN = re.compile(r'@tool_(\w+)', re.IGNORECASE)
 
 ACTION_NOT_SUPPORTED_MESSAGE = (
@@ -50,15 +52,20 @@ async def chat(
         raise HTTPException(status_code=500, detail=str(e))
 
     rename_requested = bool(RENAME_MENTION_PATTERN.search(message))
+    categorize_requested = bool(CATEGORIZE_MENTION_PATTERN.search(message))
     unknown_mentions = UNKNOWN_TOOL_PATTERN.findall(message)
-    if rename_requested and document is None:
+    if (rename_requested or categorize_requested) and document is None:
         raise HTTPException(
             status_code=400,
             detail='Tool mentions require an attached document',
         )
     if unknown_mentions:
         bad_tool = next(
-            (m for m in unknown_mentions if m.lower() != 'rename'), None
+            (
+                m for m in unknown_mentions
+                if m.lower() not in ('rename', 'categorize')
+            ),
+            None,
         )
         if bad_tool is not None:
             raise HTTPException(
@@ -87,10 +94,10 @@ async def chat(
                 f.write(data)
                 temp_path = f.name
 
-        # Language is only enforced in tool flows (document/rename),
+        # Language is only enforced in tool flows (document/rename/categorize),
         # never in normal chat. Defaults to English when undetected.
         lang_instruction = None
-        if rename_requested or document is not None:
+        if rename_requested or categorize_requested or document is not None:
             lang_instruction = language_instruction(detect_language(message))
 
         if rename_requested:
@@ -108,6 +115,24 @@ async def chat(
             message = RENAME_MENTION_PATTERN.sub('', message).strip()
             if not message:
                 message = 'Rename the attached document.'
+        elif categorize_requested:
+            tools = {'categorize_file': categorize_file}
+            tool_hint = (
+                f"{lang_instruction} "
+                f"The user attached a document at '{temp_path}' and wants "
+                "to organize it into a category folder. You MUST call the "
+                "tool 'categorize_file' with the 'file_path' argument set to "
+                "that exact path. Do not reply without calling the tool. The "
+                "tool analyzes the document, creates a dedicated folder for "
+                "its category next to the file, and moves the file into it. "
+                "After calling it, confirm to the user the detected category "
+                "and that the file was moved to the <category> folder, e.g. "
+                "'The document was categorized as <category> and moved to the "
+                "<category> folder'."
+            )
+            message = CATEGORIZE_MENTION_PATTERN.sub('', message).strip()
+            if not message:
+                message = 'Categorize and organize the attached document.'
         elif document is not None:
             tools = available_tools
             tool_name = TOOL_BY_EXTENSION[extension]
@@ -138,6 +163,25 @@ async def chat(
             if new_name.startswith('Error'):
                 raise HTTPException(status_code=502, detail=new_name)
             return {'response': _redact_path(response, temp_path), 'new_name': new_name}
+
+        if categorize_requested:
+            response, tool_results = await run_in_threadpool(
+                ask_chat, message, content, tools, tool_hint,
+                model=effective_model,
+                return_tool_results=True,
+            )
+            category = tool_results.get('categorize_file')
+            if not category:
+                raise HTTPException(
+                    status_code=502,
+                    detail='The model did not categorize the file',
+                )
+            if category.startswith('Error'):
+                raise HTTPException(status_code=502, detail=category)
+            return {
+                'response': _redact_path(response, temp_path),
+                'category': category,
+            }
 
         response = await run_in_threadpool(ask_chat, message, content, tools, tool_hint, model=effective_model)
     except HTTPException:

@@ -5,6 +5,12 @@ load_dotenv()
 
 MODEL = os.getenv('OLLAMA_MODEL', '')
 
+LANGUAGE = os.getenv('APP_LANGUAGE', '').strip().lower()
+
+SUPPORTED_LANGUAGES = ('en', 'es', 'zh', 'ja')
+
+LANGUAGE_CODE = LANGUAGE if LANGUAGE in SUPPORTED_LANGUAGES else 'en'
+
 MAX_CHARS = 30000
 
 MAX_NAME_LENGTH = 30

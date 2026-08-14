@@ -4,9 +4,19 @@ from contextvars import ContextVar
 
 from ollama import chat, list as ollama_list
 
-from app.core.settings import MODEL
+from app.core.settings import LANGUAGE_CODE, MODEL
 
 _current_model: ContextVar[str] = ContextVar('_current_model', default='')
+
+
+def _language_instruction(code: str) -> str:
+    """
+    Generic instruction telling the model to respond in a given language.
+    Uses the ISO 639-1 code so no localized dictionary is required.
+    """
+    return (
+        f"Respond exclusively in the language with ISO 639-1 code '{code}'."
+    )
 
 
 def resolve_model(selected: str | None = None) -> str:
@@ -64,7 +74,9 @@ def ask_chat(
     effective = resolve_model(model)
     token = _current_model.set(effective)
 
-    messages = []
+    messages = [
+        {'role': 'system', 'content': _language_instruction(LANGUAGE_CODE)}
+    ]
     if tool_hint:
         messages.append({'role': 'system', 'content': tool_hint})
 
@@ -88,32 +100,33 @@ def ask_chat(
         stream=False,
     )
 
-    for _ in range(5):  # max tool-call iterations
-        if not response.message.tool_calls:
-            break
+    try:
+        for _ in range(5):  # max tool-call iterations
+            if not response.message.tool_calls:
+                break
 
-        messages.append(response.message)
-        for tool_call in response.message.tool_calls:
-            function_name = tool_call.function.name
-            function_args = tool_call.function.arguments
-            if available_tools and function_name in available_tools:
-                result = available_tools[function_name](**function_args)
-                tool_results[function_name] = result
-                messages.append({
-                    'role': 'tool',
-                    'content': result,
-                    'name': function_name,
-                })
+            messages.append(response.message)
+            for tool_call in response.message.tool_calls:
+                function_name = tool_call.function.name
+                function_args = tool_call.function.arguments
+                if available_tools and function_name in available_tools:
+                    result = available_tools[function_name](**function_args)
+                    tool_results[function_name] = result
+                    messages.append({
+                        'role': 'tool',
+                        'content': result,
+                        'name': function_name,
+                    })
 
-        response = chat(
-            model=effective,
-            messages=messages,
-            tools=tools,
-            think=False,
-            stream=False,
-        )
-
-    _current_model.reset(token)
+            response = chat(
+                model=effective,
+                messages=messages,
+                tools=tools,
+                think=False,
+                stream=False,
+            )
+    finally:
+        _current_model.reset(token)
 
     if return_tool_results:
         return response.message.content, tool_results
@@ -135,6 +148,7 @@ def generate_file_name(content: str, instruction: str = '') -> dict:
         'Analyze the content of the document and generate a descriptive, '
         'short file name to rename it. Respond ONLY in JSON with the field '
         "'new_name', without extension, using underscores instead of spaces."
+        f' {_language_instruction(LANGUAGE_CODE)}'
     )
     if instruction:
         system += f" Additional user requirement: {instruction}."
@@ -177,6 +191,7 @@ def generate_category(
         'consistent category across documents. '
         "Never respond 'unknown' or 'uncategorized': always pick the closest "
         'meaningful topic based on the content. The file name is only a hint.'
+        f' {_language_instruction(LANGUAGE_CODE)}'
     )
     if existing_categories:
         system += (

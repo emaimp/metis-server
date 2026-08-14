@@ -10,7 +10,6 @@ from app.core.settings import ALLOWED_EXTENSIONS, TOOL_BY_EXTENSION
 from app.tools import available_tools
 from app.tools.run.categorize import categorize_file
 from app.tools.run.naming import rename_file
-from app.utils.language import detect_language, language_instruction
 
 router = APIRouter(prefix='/chat', tags=['chat'])
 
@@ -94,16 +93,10 @@ async def chat(
                 f.write(data)
                 temp_path = f.name
 
-        # Language is only enforced in tool flows (document/rename/categorize),
-        # never in normal chat. Defaults to English when undetected.
-        lang_instruction = None
-        if rename_requested or categorize_requested or document is not None:
-            lang_instruction = language_instruction(detect_language(message))
-
+        # The response language is enforced globally by ask_chat via the APP_LANGUAGE config.
         if rename_requested:
             tools = {'rename_file': rename_file}
             tool_hint = (
-                f"{lang_instruction} "
                 f"The user attached a document at '{temp_path}' and wants "
                 "to rename it. You MUST call the tool 'rename_file' with the "
                 "'file_path' argument set to that exact path. Do not reply "
@@ -118,7 +111,6 @@ async def chat(
         elif categorize_requested:
             tools = {'categorize_file': categorize_file}
             tool_hint = (
-                f"{lang_instruction} "
                 f"The user attached a document at '{temp_path}' and wants "
                 "to organize it into a category folder. You MUST call the "
                 "tool 'categorize_file' with the 'file_path' argument set to "
@@ -137,7 +129,6 @@ async def chat(
             tools = available_tools
             tool_name = TOOL_BY_EXTENSION[extension]
             tool_hint = (
-                f"{lang_instruction} "
                 f"The user attached a document at '{temp_path}'. "
                 f"Use the tool '{tool_name}' to read it and answer the "
                 "user's question. You cannot execute actions on the file "

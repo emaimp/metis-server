@@ -147,24 +147,40 @@ def generate_file_name(content: str, instruction: str = '') -> dict:
     system = (
         'Analyze the content of the document and generate a descriptive, '
         'short file name to rename it. Respond ONLY in JSON with the field '
-        "'new_name', without extension, using underscores instead of spaces."
-        f' {_language_instruction(LANGUAGE_CODE)}'
+        "'new_name', without extension, using underscores instead of spaces. "
+        f"The 'new_name' value MUST be in the configured language "
+        f"('{LANGUAGE_CODE}'). {_language_instruction(LANGUAGE_CODE)}"
     )
     if instruction:
         system += f" Additional user requirement: {instruction}."
 
-    response = chat(
-        model=effective,
-        messages=[
-            {'role': 'system', 'content': system},
-            {'role': 'user', 'content': content},
-        ],
-        format='json',
-        think=False,
-        stream=False,
-    )
+    messages = [
+        {'role': 'system', 'content': system},
+        {'role': 'user', 'content': content},
+    ]
 
-    return json.loads(response.message.content)
+    for attempt in range(2):
+        response = chat(
+            model=effective,
+            messages=messages,
+            format='json',
+            think=False,
+            stream=False,
+        )
+
+        data = json.loads(response.message.content)
+        if attempt < 1:
+            messages.append({'role': 'assistant', 'content': response.message.content})
+            messages.append({
+                'role': 'user',
+                'content': (
+                    'The file name must be in the configured language. '
+                    f'{_language_instruction(LANGUAGE_CODE)} '
+                    'Reply again with ONLY the JSON field "new_name".'
+                ),
+            })
+
+    return data
 
 
 def generate_category(
@@ -190,13 +206,18 @@ def generate_category(
         'without extension, spaces, or underscores. Always use the same, '
         'consistent category across documents. '
         "Never respond 'unknown' or 'uncategorized': always pick the closest "
-        'meaningful topic based on the content. The file name is only a hint.'
-        f' {_language_instruction(LANGUAGE_CODE)}'
+        'meaningful topic based on the content. The file name is only a hint. '
+        f"The 'category' value MUST be a single word in the configured "
+        f"language ('{LANGUAGE_CODE}'), even when the document content or "
+        f'existing categories are in another language. '
+        f'{_language_instruction(LANGUAGE_CODE)}'
     )
     if existing_categories:
         system += (
-            ' Prefer reusing one of these existing categories (case-insensitive) '
-            'when it fits; only propose a new one if none matches: '
+            ' Reuse the concept of an existing category only when it fits, '
+            'but ALWAYS output the "category" value in the configured '
+            'language, translating the existing name if needed. Existing '
+            'categories (possibly in another language): '
             f"{', '.join(existing_categories)}."
         )
 
@@ -206,15 +227,30 @@ def generate_category(
     else:
         user += 'No content provided; classify based on the file name only.'
 
-    response = chat(
-        model=effective,
-        messages=[
-            {'role': 'system', 'content': system},
-            {'role': 'user', 'content': user},
-        ],
-        format='json',
-        think=False,
-        stream=False,
-    )
+    messages = [
+        {'role': 'system', 'content': system},
+        {'role': 'user', 'content': user},
+    ]
 
-    return json.loads(response.message.content)
+    for attempt in range(2):
+        response = chat(
+            model=effective,
+            messages=messages,
+            format='json',
+            think=False,
+            stream=False,
+        )
+
+        data = json.loads(response.message.content)
+        if attempt < 1:
+            messages.append({'role': 'assistant', 'content': response.message.content})
+            messages.append({
+                'role': 'user',
+                'content': (
+                    'The category must be in the configured language. '
+                    f'{_language_instruction(LANGUAGE_CODE)} '
+                    'Reply again with ONLY the JSON field "category".'
+                ),
+            })
+
+    return data

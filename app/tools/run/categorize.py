@@ -34,6 +34,22 @@ def _unique_dest(dest: Path) -> Path:
     return dest.with_name(f'{stem}_{abs(hash(dest))}{suffix}')
 
 
+def categorize_tool_hint(file_path: str) -> str:
+    """Hint for the chat model to invoke categorize_file correctly."""
+    return (
+        f"The user attached a document at '{file_path}' and wants "
+        "to organize it into a category folder. You MUST call the "
+        "tool 'categorize_file' with the 'file_path' argument set to "
+        "that exact path. Do not reply without calling the tool. The "
+        "tool analyzes the document, creates a dedicated folder for "
+        "its category next to the file, and moves the file into it. "
+        "After calling it, confirm to the user the detected category "
+        "and that the file was moved to the <category> folder, e.g. "
+        "'The document was categorized as <category> and moved to the "
+        "<category> folder'."
+    )
+
+
 def categorize_file(file_path: str) -> str:
     """
     Classifies a single document and moves it into a dedicated folder named

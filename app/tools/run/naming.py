@@ -23,6 +23,19 @@ def _sanitize_name(name: str) -> str:
     return name or 'document'
 
 
+def rename_tool_hint(file_path: str) -> str:
+    """Hint for the chat model to invoke rename_file correctly."""
+    return (
+        f"The user attached a document at '{file_path}' and wants "
+        "to rename it. You MUST call the tool 'rename_file' with the "
+        "'file_path' argument set to that exact path. Do not reply "
+        "without calling the tool. The client applies the rename with "
+        "the name returned by the tool, so after calling it confirm to "
+        "the user that the file has been renamed, e.g. 'The file was "
+        "renamed to <name>'."
+    )
+
+
 def rename_file(file_path: str, instruction: str = '') -> str:
     """
     Analyzes the content of a document and returns the new file name

@@ -8,8 +8,8 @@ from starlette.concurrency import run_in_threadpool
 from app.ai.ollama import ask_chat, resolve_model
 from app.core.settings import ALLOWED_EXTENSIONS, TOOL_BY_EXTENSION
 from app.tools import available_tools
-from app.tools.run.categorize import categorize_file
-from app.tools.run.naming import rename_file
+from app.tools.run.categorize import categorize_file, categorize_tool_hint
+from app.tools.run.naming import rename_file, rename_tool_hint
 
 router = APIRouter(prefix='/chat', tags=['chat'])
 
@@ -28,6 +28,54 @@ def _redact_path(response: str, temp_path: str | None) -> str:
     if temp_path:
         response = response.replace(temp_path, '[attached file]')
     return response
+
+
+async def _save_temp_document(document: UploadFile, extension: str) -> str:
+    """Write the uploaded document to a temporary file and return its path."""
+    data = await document.read()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as f:
+        f.write(data)
+        return f.name
+
+
+async def _run_chat(
+    message: str,
+    content: bytes | None,
+    tools: dict | None,
+    tool_hint: str | None,
+    model: str,
+    return_tool_results: bool = False,
+):
+    """Run ask_chat in a thread pool."""
+    return await run_in_threadpool(
+        ask_chat, message, content, tools, tool_hint,
+        model=model,
+        return_tool_results=return_tool_results,
+    )
+
+
+def _require_tool_result(tool_results: dict, tool_name: str, missing_detail: str) -> str:
+    """Extract a tool result, raising 502 on missing or error."""
+    result = tool_results.get(tool_name)
+    if not result:
+        raise HTTPException(status_code=502, detail=missing_detail)
+    if result.startswith('Error'):
+        raise HTTPException(status_code=502, detail=result)
+    return result
+
+
+def _document_hint(temp_path: str, tool_name: str) -> str:
+    """Hint for answering questions about an attached document."""
+    return (
+        f"The user attached a document at '{temp_path}'. "
+        f"Use the tool '{tool_name}' to read it and answer the "
+        "user's question. You cannot execute actions on the file "
+        "(rename, move, delete, edit, etc.). If the user asks for "
+        "an action you cannot perform, respond with exactly this "
+        f"meaning: '{ACTION_NOT_SUPPORTED_MESSAGE}', briefly and "
+        "without extra explanation. Never reveal, mention, or link "
+        "the path of the attached document."
+    )
 
 
 @router.post('')
@@ -85,96 +133,51 @@ async def chat(
     try:
         content = await image.read() if image is not None else None
 
+        if document is not None:
+            temp_path = await _save_temp_document(document, extension)
+
         tools = None
         tool_hint = None
-        if document is not None:
-            data = await document.read()
-            with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as f:
-                f.write(data)
-                temp_path = f.name
 
-        # The response language is enforced globally by ask_chat via the APP_LANGUAGE config.
         if rename_requested:
             tools = {'rename_file': rename_file}
-            tool_hint = (
-                f"The user attached a document at '{temp_path}' and wants "
-                "to rename it. You MUST call the tool 'rename_file' with the "
-                "'file_path' argument set to that exact path. Do not reply "
-                "without calling the tool. The client applies the rename with "
-                "the name returned by the tool, so after calling it confirm to "
-                "the user that the file has been renamed, e.g. 'The file was "
-                "renamed to <name>'."
-            )
+            tool_hint = rename_tool_hint(temp_path)
             message = RENAME_MENTION_PATTERN.sub('', message).strip()
             if not message:
                 message = 'Rename the attached document.'
         elif categorize_requested:
             tools = {'categorize_file': categorize_file}
-            tool_hint = (
-                f"The user attached a document at '{temp_path}' and wants "
-                "to organize it into a category folder. You MUST call the "
-                "tool 'categorize_file' with the 'file_path' argument set to "
-                "that exact path. Do not reply without calling the tool. The "
-                "tool analyzes the document, creates a dedicated folder for "
-                "its category next to the file, and moves the file into it. "
-                "After calling it, confirm to the user the detected category "
-                "and that the file was moved to the <category> folder, e.g. "
-                "'The document was categorized as <category> and moved to the "
-                "<category> folder'."
-            )
+            tool_hint = categorize_tool_hint(temp_path)
             message = CATEGORIZE_MENTION_PATTERN.sub('', message).strip()
             if not message:
                 message = 'Categorize and organize the attached document.'
         elif document is not None:
             tools = available_tools
-            tool_name = TOOL_BY_EXTENSION[extension]
-            tool_hint = (
-                f"The user attached a document at '{temp_path}'. "
-                f"Use the tool '{tool_name}' to read it and answer the "
-                "user's question. You cannot execute actions on the file "
-                "(rename, move, delete, edit, etc.). If the user asks for "
-                "an action you cannot perform, respond with exactly this "
-                f"meaning: '{ACTION_NOT_SUPPORTED_MESSAGE}', briefly and "
-                "without extra explanation. Never reveal, mention, or link "
-                "the path of the attached document."
-            )
+            tool_hint = _document_hint(temp_path, TOOL_BY_EXTENSION[extension])
 
         if rename_requested:
-            response, tool_results = await run_in_threadpool(
-                ask_chat, message, content, tools, tool_hint,
-                model=effective_model,
-                return_tool_results=True,
+            response, tool_results = await _run_chat(
+                message, content, tools, tool_hint,
+                effective_model, return_tool_results=True,
             )
-            new_name = tool_results.get('rename_file')
-            if not new_name:
-                raise HTTPException(
-                    status_code=502,
-                    detail='The model did not generate a file name',
-                )
-            if new_name.startswith('Error'):
-                raise HTTPException(status_code=502, detail=new_name)
+            new_name = _require_tool_result(
+                tool_results, 'rename_file',
+                'The model did not generate a file name',
+            )
             return {'response': _redact_path(response, temp_path), 'new_name': new_name}
 
         if categorize_requested:
-            response, tool_results = await run_in_threadpool(
-                ask_chat, message, content, tools, tool_hint,
-                model=effective_model,
-                return_tool_results=True,
+            response, tool_results = await _run_chat(
+                message, content, tools, tool_hint,
+                effective_model, return_tool_results=True,
             )
-            category = tool_results.get('categorize_file')
-            if not category:
-                raise HTTPException(
-                    status_code=502,
-                    detail='The model did not categorize the file',
-                )
-            if category.startswith('Error'):
-                raise HTTPException(status_code=502, detail=category)
-            return {
-                'response': _redact_path(response, temp_path),
-                'category': category,
-            }
+            category = _require_tool_result(
+                tool_results, 'categorize_file',
+                'The model did not categorize the file',
+            )
+            return {'response': _redact_path(response, temp_path), 'category': category}
 
-        response = await run_in_threadpool(ask_chat, message, content, tools, tool_hint, model=effective_model)
+        response = await _run_chat(message, content, tools, tool_hint, effective_model)
     except HTTPException:
         raise
     except Exception as e:

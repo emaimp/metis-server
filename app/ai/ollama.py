@@ -25,19 +25,55 @@ def resolve_model(selected: str | None = None) -> str:
 
     Precedence:
       1. Explicitly selected model (from the client/UI).
-      2. OLLAMA_MODEL env var.
-      3. Clear error if none of the above.
+      2. Active model in the current context (set by ask_chat during tool calls).
+      3. OLLAMA_MODEL env var.
+      4. Clear error if none of the above.
 
     Raises:
         RuntimeError: if no model can be resolved.
     """
-    model = selected or MODEL
+    model = selected or _current_model.get() or MODEL
     if not model:
         raise RuntimeError(
             'No model configured. Set OLLAMA_MODEL in the .env file '
             'or select a model from the client.'
         )
     return model
+
+
+def _generate_json_field(
+    field: str, system: str, user: str, model: str,
+) -> dict:
+    """
+    Runs a two-attempt JSON generation. The first attempt is followed by a
+    reminder to use the configured language, and the second attempt is returned.
+    """
+    messages = [
+        {'role': 'system', 'content': system},
+        {'role': 'user', 'content': user},
+    ]
+
+    for attempt in range(2):
+        response = chat(
+            model=model,
+            messages=messages,
+            format='json',
+            think=False,
+            stream=False,
+        )
+        data = json.loads(response.message.content)
+        if attempt == 0:
+            messages.append({'role': 'assistant', 'content': response.message.content})
+            messages.append({
+                'role': 'user',
+                'content': (
+                    f'The "{field}" value must be in the configured language. '
+                    f'{_language_instruction(LANGUAGE_CODE)} '
+                    f'Reply again with ONLY the JSON field "{field}".'
+                ),
+            })
+
+    return data
 
 
 def list_models() -> list[str]:
@@ -132,125 +168,3 @@ def ask_chat(
         return response.message.content, tool_results
 
     return response.message.content
-
-
-def generate_file_name(content: str, instruction: str = '') -> dict:
-    """
-    Asks the model for a suggested file name for a given content.
-
-    Args:
-        Content: The content of the document to analyze.
-        Instruction: Additional user requirement for the suggestion.
-    """
-    effective = _current_model.get() or resolve_model(None)
-
-    system = (
-        'Analyze the content of the document and generate a descriptive, '
-        'short file name to rename it. Respond ONLY in JSON with the field '
-        "'new_name', without extension, using underscores instead of spaces. "
-        f"The 'new_name' value MUST be in the configured language "
-        f"('{LANGUAGE_CODE}'). {_language_instruction(LANGUAGE_CODE)}"
-    )
-    if instruction:
-        system += f" Additional user requirement: {instruction}."
-
-    messages = [
-        {'role': 'system', 'content': system},
-        {'role': 'user', 'content': content},
-    ]
-
-    for attempt in range(2):
-        response = chat(
-            model=effective,
-            messages=messages,
-            format='json',
-            think=False,
-            stream=False,
-        )
-
-        data = json.loads(response.message.content)
-        if attempt < 1:
-            messages.append({'role': 'assistant', 'content': response.message.content})
-            messages.append({
-                'role': 'user',
-                'content': (
-                    'The file name must be in the configured language. '
-                    f'{_language_instruction(LANGUAGE_CODE)} '
-                    'Reply again with ONLY the JSON field "new_name".'
-                ),
-            })
-
-    return data
-
-
-def generate_category(
-    name: str,
-    content: str = '',
-    existing_categories: list[str] | None = None,
-) -> dict:
-    """
-    Asks the model for a category (topic/type) for a given document.
-
-    Args:
-        name: The file name (without extension) of the document.
-        content: Optional content of the document to help classify it.
-        existing_categories: Optional categories already detected so the model
-            can reuse them instead of inventing new ones.
-    """
-    effective = _current_model.get() or resolve_model(None)
-
-    system = (
-        'You are a document classifier. Analyze the content of the document '
-        'and determine its category (topic/type). '
-        'Respond ONLY in JSON with the field "category": a SINGLE WORD, '
-        'without extension, spaces, or underscores. Always use the same, '
-        'consistent category across documents. '
-        "Never respond 'unknown' or 'uncategorized': always pick the closest "
-        'meaningful topic based on the content. The file name is only a hint. '
-        f"The 'category' value MUST be a single word in the configured "
-        f"language ('{LANGUAGE_CODE}'), even when the document content or "
-        f'existing categories are in another language. '
-        f'{_language_instruction(LANGUAGE_CODE)}'
-    )
-    if existing_categories:
-        system += (
-            ' Reuse the concept of an existing category only when it fits, '
-            'but ALWAYS output the "category" value in the configured '
-            'language, translating the existing name if needed. Existing '
-            'categories (possibly in another language): '
-            f"{', '.join(existing_categories)}."
-        )
-
-    user = f'File name: {name}\n'
-    if content:
-        user += f'Content:\n{content}\n'
-    else:
-        user += 'No content provided; classify based on the file name only.'
-
-    messages = [
-        {'role': 'system', 'content': system},
-        {'role': 'user', 'content': user},
-    ]
-
-    for attempt in range(2):
-        response = chat(
-            model=effective,
-            messages=messages,
-            format='json',
-            think=False,
-            stream=False,
-        )
-
-        data = json.loads(response.message.content)
-        if attempt < 1:
-            messages.append({'role': 'assistant', 'content': response.message.content})
-            messages.append({
-                'role': 'user',
-                'content': (
-                    'The category must be in the configured language. '
-                    f'{_language_instruction(LANGUAGE_CODE)} '
-                    'Reply again with ONLY the JSON field "category".'
-                ),
-            })
-
-    return data

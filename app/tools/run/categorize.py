@@ -2,8 +2,8 @@ import re
 import shutil
 from pathlib import Path
 
-from app.ai.ollama import generate_category
-from app.core.settings import MAX_CATEGORY_LENGTH, TOOL_BY_EXTENSION
+from app.ai.ollama import _generate_json_field, _language_instruction, resolve_model
+from app.core.settings import LANGUAGE_CODE, MAX_CATEGORY_LENGTH, TOOL_BY_EXTENSION
 from app.tools import available_tools
 
 
@@ -69,7 +69,35 @@ def categorize_file(file_path: str) -> str:
     )
 
     try:
-        data = generate_category(stem, content, existing_categories=existing)
+        system = (
+            'You are a document classifier. Analyze the content of the document '
+            'and determine its category (topic/type). '
+            'Respond ONLY in JSON with the field "category": a SINGLE WORD, '
+            'without extension, spaces, or underscores. Always use the same, '
+            'consistent category across documents. '
+            "Never respond 'unknown' or 'uncategorized': always pick the closest "
+            'meaningful topic based on the content. The file name is only a hint. '
+            f"The 'category' value MUST be a single word in the configured "
+            f"language ('{LANGUAGE_CODE}'), even when the document content or "
+            f'existing categories are in another language. '
+            f'{_language_instruction(LANGUAGE_CODE)}'
+        )
+        if existing:
+            system += (
+                ' Reuse the concept of an existing category only when it fits, '
+                'but ALWAYS output the "category" value in the configured '
+                'language, translating the existing name if needed. Existing '
+                'categories (possibly in another language): '
+                f"{', '.join(existing)}."
+            )
+
+        user = f'File name: {stem}\n'
+        if content:
+            user += f'Content:\n{content}\n'
+        else:
+            user += 'No content provided; classify based on the file name only.'
+
+        data = _generate_json_field('category', system, user, resolve_model())
     except Exception as e:
         return f'Error generating the category: {str(e)}'
 

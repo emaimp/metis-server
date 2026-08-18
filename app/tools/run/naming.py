@@ -1,8 +1,8 @@
 import re
 from pathlib import Path
 
-from app.ai.ollama import generate_file_name
-from app.core.settings import MAX_NAME_LENGTH, TOOL_BY_EXTENSION
+from app.ai.ollama import _generate_json_field, _language_instruction, resolve_model
+from app.core.settings import LANGUAGE_CODE, MAX_NAME_LENGTH, TOOL_BY_EXTENSION
 from app.tools import available_tools
 
 
@@ -45,7 +45,17 @@ def rename_file(file_path: str, instruction: str = '') -> str:
         return content
 
     try:
-        data = generate_file_name(content, instruction)
+        system = (
+            'Analyze the content of the document and generate a descriptive, '
+            'short file name to rename it. Respond ONLY in JSON with the field '
+            "'new_name', without extension, using underscores instead of spaces. "
+            f"The 'new_name' value MUST be in the configured language "
+            f"('{LANGUAGE_CODE}'). {_language_instruction(LANGUAGE_CODE)}"
+        )
+        if instruction:
+            system += f" Additional user requirement: {instruction}."
+
+        data = _generate_json_field('new_name', system, content, resolve_model())
     except Exception as e:
         return f"Error generating the file name: {str(e)}"
 

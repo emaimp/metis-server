@@ -35,23 +35,7 @@ def _unique_dest(dest: Path) -> Path:
     return dest.with_name(f'{stem}_{abs(hash(dest))}{suffix}')
 
 
-def categorize_tool_hint(file_path: str) -> str:
-    """Hint for the chat model to invoke categorize_file correctly."""
-    return (
-        f"The user attached a file at '{file_path}' and wants "
-        "to organize it into a category folder. You MUST call the "
-        "tool 'categorize_file' with the 'file_path' argument set to "
-        "that exact path. Do not reply without calling the tool. The "
-        "tool analyzes the file, creates a dedicated folder for "
-        "its category next to the file, and moves the file into it. "
-        "After calling it, confirm to the user the detected category "
-        "and that the file was moved to the <category> folder, e.g. "
-        "'The file was categorized as <category> and moved to the "
-        "<category> folder'."
-    )
-
-
-def categorize_file(file_path: str) -> str:
+def categorize_file(file_path: str, model: str | None = None) -> str:
     """
     Classifies a single file and moves it into a dedicated folder named
     after its category, created next to the file.
@@ -63,6 +47,7 @@ def categorize_file(file_path: str) -> str:
 
     Args:
         file_path: The path to the document to categorize.
+        model: Override the Ollama model for this call.
 
     Returns:
         The category (folder name) on success, or an 'Error: ...' string.
@@ -126,7 +111,7 @@ def categorize_file(file_path: str) -> str:
             user += 'No content provided; classify based on the file name only.'
 
         data = _generate_json_field(
-            'category', system, user, resolve_model(),
+            'category', system, user, resolve_model(model),
             images=[image_data] if image_data else None,
         )
     except Exception as e:

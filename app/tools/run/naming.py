@@ -24,20 +24,7 @@ def _sanitize_name(name: str) -> str:
     return name or 'document'
 
 
-def rename_tool_hint(file_path: str) -> str:
-    """Hint for the chat model to invoke rename_file correctly."""
-    return (
-        f"The user attached a file at '{file_path}' and wants "
-        "to rename it. You MUST call the tool 'rename_file' with the "
-        "'file_path' argument set to that exact path. Do not reply "
-        "without calling the tool. The client applies the rename with "
-        "the name returned by the tool, so after calling it confirm to "
-        "the user that the file has been renamed, e.g. 'The file was "
-        "renamed to <name>'."
-    )
-
-
-def rename_file(file_path: str, instruction: str = '') -> str:
+def rename_file(file_path: str, instruction: str = '', model: str | None = None) -> str:
     """
     Analyzes the content of a file and returns the new file name
     that the client will apply.
@@ -47,6 +34,7 @@ def rename_file(file_path: str, instruction: str = '') -> str:
     Args:
         file_path: The path to the document to rename.
         instruction: Additional user requirement for the new name.
+        model: Override the Ollama model for this call.
     """
     ext = Path(file_path).suffix.lower()
     is_image = ext in IMAGE_EXTENSIONS
@@ -83,7 +71,7 @@ def rename_file(file_path: str, instruction: str = '') -> str:
 
         user = content if content else ''
         data = _generate_json_field(
-            'new_name', system, user, resolve_model(),
+            'new_name', system, user, resolve_model(model),
             images=[image_data] if image_data else None,
         )
     except Exception as e:

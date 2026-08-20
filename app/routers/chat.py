@@ -8,8 +8,8 @@ from starlette.concurrency import run_in_threadpool
 from app.ai.ollama import ask_chat, resolve_model
 from app.core.settings import DOCUMENT_EXTENSIONS, TOOL_BY_EXTENSION
 from app.tools import available_tools
-from app.tools.run.categorize import categorize_file, categorize_tool_hint
-from app.tools.run.naming import rename_file, rename_tool_hint
+from app.tools.run.categorize import categorize_file
+from app.tools.run.naming import rename_file
 
 router = APIRouter(prefix='/chat', tags=['chat'])
 
@@ -49,19 +49,16 @@ async def _run_chat(
     tools: dict | None,
     tool_hint: str | None,
     model: str,
-    return_tool_results: bool = False,
 ):
     """Run ask_chat in a thread pool."""
     return await run_in_threadpool(
         ask_chat, message, content, tools, tool_hint,
         model=model,
-        return_tool_results=return_tool_results,
     )
 
 
-def _require_tool_result(tool_results: dict, tool_name: str, missing_detail: str) -> str:
-    """Extract a tool result, raising 502 on missing or error."""
-    result = tool_results.get(tool_name)
+def _require_tool_result(result: str, missing_detail: str) -> str:
+    """Check a tool result string, raising 502 on missing or error."""
     if not result:
         raise HTTPException(status_code=502, detail=missing_detail)
     if result.startswith('Error'):
@@ -151,42 +148,27 @@ async def chat(
         tool_hint = None
 
         if rename_requested:
-            tools = {'rename_file': rename_file}
-            tool_hint = rename_tool_hint(temp_path)
-            message = RENAME_MENTION_PATTERN.sub('', message).strip()
-            if not message:
-                message = 'Rename the attached file.'
-        elif categorize_requested:
-            tools = {'categorize_file': categorize_file}
-            tool_hint = categorize_tool_hint(temp_path)
-            message = CATEGORIZE_MENTION_PATTERN.sub('', message).strip()
-            if not message:
-                message = 'Categorize and organize the attached file.'
-        elif document is not None:
-            tools = available_tools
-            tool_hint = _document_hint(temp_path, TOOL_BY_EXTENSION[extension])
-
-        if rename_requested:
-            response, tool_results = await _run_chat(
-                message, content, tools, tool_hint,
-                effective_model, return_tool_results=True,
+            instruction = RENAME_MENTION_PATTERN.sub('', message).strip()
+            result = await run_in_threadpool(
+                rename_file, temp_path, instruction, effective_model,
             )
             new_name = _require_tool_result(
-                tool_results, 'rename_file',
-                'The model did not generate a file name',
+                result, 'The tool did not generate a file name',
             )
-            return {'response': _redact_path(response, temp_path), 'new_name': new_name}
+            return {'new_name': new_name}
 
         if categorize_requested:
-            response, tool_results = await _run_chat(
-                message, content, tools, tool_hint,
-                effective_model, return_tool_results=True,
+            result = await run_in_threadpool(
+                categorize_file, temp_path, effective_model,
             )
             category = _require_tool_result(
-                tool_results, 'categorize_file',
-                'The model did not categorize the file',
+                result, 'The tool did not categorize the file',
             )
-            return {'response': _redact_path(response, temp_path), 'category': category}
+            return {'category': category}
+
+        if document is not None:
+            tools = available_tools
+            tool_hint = _document_hint(temp_path, TOOL_BY_EXTENSION[extension])
 
         response = await _run_chat(message, content, tools, tool_hint, effective_model)
     except HTTPException:

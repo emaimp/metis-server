@@ -6,7 +6,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from app.ai.ollama import ask_chat, resolve_model
-from app.core.settings import ALLOWED_EXTENSIONS, TOOL_BY_EXTENSION
+from app.core.settings import DOCUMENT_EXTENSIONS, TOOL_BY_EXTENSION
 from app.tools import available_tools
 from app.tools.run.categorize import categorize_file, categorize_tool_hint
 from app.tools.run.naming import rename_file, rename_tool_hint
@@ -30,12 +30,17 @@ def _redact_path(response: str, temp_path: str | None) -> str:
     return response
 
 
-async def _save_temp_document(document: UploadFile, extension: str) -> str:
-    """Write the uploaded document to a temporary file and return its path."""
-    data = await document.read()
+def _save_temp_bytes(data: bytes, extension: str) -> str:
+    """Write raw bytes to a temporary file and return its path."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as f:
         f.write(data)
         return f.name
+
+
+async def _save_temp_document(document: UploadFile, extension: str) -> str:
+    """Write the uploaded document to a temporary file and return its path."""
+    data = await document.read()
+    return _save_temp_bytes(data, extension)
 
 
 async def _run_chat(
@@ -65,16 +70,16 @@ def _require_tool_result(tool_results: dict, tool_name: str, missing_detail: str
 
 
 def _document_hint(temp_path: str, tool_name: str) -> str:
-    """Hint for answering questions about an attached document."""
+    """Hint for answering questions about an attached file."""
     return (
-        f"The user attached a document at '{temp_path}'. "
+        f"The user attached a file at '{temp_path}'. "
         f"Use the tool '{tool_name}' to read it and answer the "
         "user's question. You cannot execute actions on the file "
         "(rename, move, delete, edit, etc.). If the user asks for "
         "an action you cannot perform, respond with exactly this "
         f"meaning: '{ACTION_NOT_SUPPORTED_MESSAGE}', briefly and "
         "without extra explanation. Never reveal, mention, or link "
-        "the path of the attached document."
+        "the path of the attached file."
     )
 
 
@@ -101,10 +106,10 @@ async def chat(
     rename_requested = bool(RENAME_MENTION_PATTERN.search(message))
     categorize_requested = bool(CATEGORIZE_MENTION_PATTERN.search(message))
     unknown_mentions = UNKNOWN_TOOL_PATTERN.findall(message)
-    if (rename_requested or categorize_requested) and document is None:
+    if (rename_requested or categorize_requested) and document is None and image is None:
         raise HTTPException(
             status_code=400,
-            detail='Tool mentions require an attached document',
+            detail='Tool mentions require an attached document or image',
         )
     if unknown_mentions:
         bad_tool = next(
@@ -123,10 +128,10 @@ async def chat(
     extension = None
     if document is not None:
         extension = Path(document.filename or '').suffix.lower()
-        if extension not in ALLOWED_EXTENSIONS:
+        if extension not in DOCUMENT_EXTENSIONS:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported document type. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+                detail=f"Unsupported document type. Allowed: {', '.join(sorted(DOCUMENT_EXTENSIONS))}",
             )
 
     temp_path = None
@@ -135,6 +140,12 @@ async def chat(
 
         if document is not None:
             temp_path = await _save_temp_document(document, extension)
+        elif (rename_requested or categorize_requested) and content is not None:
+            image_ext = Path(image.filename or '').suffix.lower()
+            if image_ext not in TOOL_BY_EXTENSION:
+                image_ext = '.png'
+            temp_path = _save_temp_bytes(content, image_ext)
+            content = None
 
         tools = None
         tool_hint = None
@@ -144,13 +155,13 @@ async def chat(
             tool_hint = rename_tool_hint(temp_path)
             message = RENAME_MENTION_PATTERN.sub('', message).strip()
             if not message:
-                message = 'Rename the attached document.'
+                message = 'Rename the attached file.'
         elif categorize_requested:
             tools = {'categorize_file': categorize_file}
             tool_hint = categorize_tool_hint(temp_path)
             message = CATEGORIZE_MENTION_PATTERN.sub('', message).strip()
             if not message:
-                message = 'Categorize and organize the attached document.'
+                message = 'Categorize and organize the attached file.'
         elif document is not None:
             tools = available_tools
             tool_hint = _document_hint(temp_path, TOOL_BY_EXTENSION[extension])

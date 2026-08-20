@@ -43,6 +43,7 @@ def resolve_model(selected: str | None = None) -> str:
 
 def _generate_json_field(
     field: str, system: str, user: str, model: str,
+    images: list[bytes] | None = None,
 ) -> dict:
     """
     Runs a two-attempt JSON generation. The first attempt is followed by a
@@ -52,6 +53,8 @@ def _generate_json_field(
         {'role': 'system', 'content': system},
         {'role': 'user', 'content': user},
     ]
+    if images:
+        messages[1]['images'] = images
 
     for attempt in range(2):
         response = chat(

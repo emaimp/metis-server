@@ -17,10 +17,18 @@ MAX_NAME_LENGTH = 30
 
 MAX_CATEGORY_LENGTH = 30
 
-ALLOWED_EXTENSIONS = {'.txt', '.pdf', '.docx'}
+DOCUMENT_EXTENSIONS = {'.txt', '.pdf', '.docx'}
+
+IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'}
 
 TOOL_BY_EXTENSION = {
     '.txt': 'read_txt',
     '.pdf': 'read_pdf',
     '.docx': 'read_docx',
+    '.png': 'read_image',
+    '.jpg': 'read_image',
+    '.jpeg': 'read_image',
+    '.gif': 'read_image',
+    '.webp': 'read_image',
+    '.bmp': 'read_image',
 }

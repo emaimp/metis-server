@@ -1,5 +1,4 @@
 import re
-import shutil
 from pathlib import Path
 
 from app.ai.ollama import _generate_json_field, _language_instruction, resolve_model
@@ -21,24 +20,14 @@ def _sanitize_category(name: str) -> str:
     return name.lower() or 'uncategorized'
 
 
-def _unique_dest(dest: Path) -> Path:
+def categorize_file(
+    file_path: str,
+    existing_categories: list[str] | None = None,
+    model: str | None = None,
+) -> str:
     """
-    Returns a destination path that does not collide with an existing file.
-    """
-    if not dest.exists():
-        return dest
-    stem, suffix = dest.stem, dest.suffix
-    for i in range(1, 10000):
-        candidate = dest.with_name(f'{stem}_{i}{suffix}')
-        if not candidate.exists():
-            return candidate
-    return dest.with_name(f'{stem}_{abs(hash(dest))}{suffix}')
-
-
-def categorize_file(file_path: str, model: str | None = None) -> str:
-    """
-    Classifies a single file and moves it into a dedicated folder named
-    after its category, created next to the file.
+    Analyzes a file and returns its category. The frontend is responsible
+    for creating the category folder and moving the file into it.
 
     The file content is always analyzed; the file name is only used as
     an additional hint for the model.
@@ -47,6 +36,8 @@ def categorize_file(file_path: str, model: str | None = None) -> str:
 
     Args:
         file_path: The path to the document to categorize.
+        existing_categories: Category names the frontend already has,
+            so the model can reuse them for consistency.
         model: Override the Ollama model for this call.
 
     Returns:
@@ -76,10 +67,6 @@ def categorize_file(file_path: str, model: str | None = None) -> str:
     except Exception as e:
         return f"Error reading the file: {e}"
 
-    existing = sorted(
-        d.name for d in path.parent.iterdir() if d.is_dir()
-    )
-
     try:
         source = 'image' if is_image else 'document'
         system = (
@@ -95,13 +82,13 @@ def categorize_file(file_path: str, model: str | None = None) -> str:
             f'existing categories are in another language. '
             f'{_language_instruction(LANGUAGE_CODE)}'
         )
-        if existing:
+        if existing_categories:
             system += (
                 ' Reuse the concept of an existing category only when it fits, '
                 'but ALWAYS output the "category" value in the configured '
                 'language, translating the existing name if needed. Existing '
                 'categories (possibly in another language): '
-                f"{', '.join(existing)}."
+                f"{', '.join(existing_categories)}."
             )
 
         user = f'File name: {stem}\n'
@@ -121,15 +108,4 @@ def categorize_file(file_path: str, model: str | None = None) -> str:
     if not isinstance(category, str) or not category.strip():
         return 'Error: Could not generate a category.'
 
-    category = _sanitize_category(category)
-
-    folder = next(
-        (d for d in existing if d.lower() == category), category
-    )
-    destination_dir = path.parent / folder
-    destination_dir.mkdir(parents=True, exist_ok=True)
-
-    destination = _unique_dest(destination_dir / path.name)
-    shutil.move(str(path), str(destination))
-
-    return category
+    return _sanitize_category(category)

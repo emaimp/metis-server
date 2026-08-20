@@ -86,6 +86,7 @@ async def chat(
     model: str = Form(None),
     image: UploadFile = File(None),
     document: UploadFile = File(None),
+    existing_categories: str = Form(''),
 ):
     """
     Free chat with the model. Image and document (.txt, .pdf, .docx) are optional:
@@ -158,8 +159,11 @@ async def chat(
             return {'new_name': new_name}
 
         if categorize_requested:
+            categories = [
+                c.strip() for c in existing_categories.split(',') if c.strip()
+            ] if existing_categories else None
             result = await run_in_threadpool(
-                categorize_file, temp_path, effective_model,
+                categorize_file, temp_path, categories, effective_model,
             )
             category = _require_tool_result(
                 result, 'The tool did not categorize the file',

@@ -7,7 +7,7 @@ from app.core.settings import (
     IMAGE_EXTENSIONS,
     LANGUAGE_CODE,
     MAX_CATEGORY_LENGTH,
-    MIN_CONTENT_CHARS,
+    MIN_UNIQUE_WORDS,
     TOOL_BY_EXTENSION,
 )
 from app.tools import available_tools
@@ -16,13 +16,12 @@ from app.tools.reads.image import read_image_bytes
 
 def _has_min_content(content: str | None) -> bool:
     """
-    Returns True when the document content carries enough meaningful text
-    (at least MIN_CONTENT_CHARS alphanumeric characters) to base a
-    categorization decision on.
+    Returns True when the document content carries enough meaningful text to base a categorization decision on.
     """
     if not content:
         return False
-    return sum(ch.isalnum() for ch in content) >= MIN_CONTENT_CHARS
+    words = re.findall(r'\w+', content.lower())
+    return len(set(words)) >= MIN_UNIQUE_WORDS
 
 
 def _sanitize_category(name: str) -> str:

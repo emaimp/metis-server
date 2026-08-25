@@ -13,8 +13,8 @@ LANGUAGE_CODE = LANGUAGE if LANGUAGE in SUPPORTED_LANGUAGES else 'en'
 
 MAX_CHARS = 30000
 
-# Minimum alphanumeric characters a document must have to be considered.
-MIN_CONTENT_CHARS = 50
+# Minimum distinct words a document must contain to be considered.
+MIN_UNIQUE_WORDS = 20
 
 # Fixed sentinel values returned when a file does not carry enough information to decide.
 DEFAULT_NAME = 'unassigned'

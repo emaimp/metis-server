@@ -40,6 +40,7 @@ def _sanitize_category(name: str) -> str:
 def categorize_file(
     file_path: str,
     existing_categories: list[str] | None = None,
+    instruction: str = '',
     model: str | None = None,
 ) -> str:
     """
@@ -55,6 +56,7 @@ def categorize_file(
         file_path: The path to the document to categorize.
         existing_categories: Category names the frontend already has,
             so the model can reuse them for consistency.
+        instruction: Additional user requirement steering the category.
         model: Override the Ollama model for this call.
 
     Returns:
@@ -115,6 +117,8 @@ def categorize_file(
                 'categories (possibly in another language): '
                 f"{', '.join(existing_categories)}."
             )
+        if instruction:
+            system += f" Additional user requirement: {instruction}."
 
         user = f'File name: {stem}\n'
         if content:

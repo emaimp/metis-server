@@ -159,11 +159,13 @@ async def chat(
             return {'new_name': new_name}
 
         if categorize_requested:
+            instruction = CATEGORIZE_MENTION_PATTERN.sub('', message).strip()
             categories = [
                 c.strip() for c in existing_categories.split(',') if c.strip()
             ] if existing_categories else None
             result = await run_in_threadpool(
-                categorize_file, temp_path, categories, effective_model,
+                categorize_file, temp_path, categories, instruction,
+                effective_model,
             )
             category = _require_tool_result(
                 result, 'The tool did not categorize the file',

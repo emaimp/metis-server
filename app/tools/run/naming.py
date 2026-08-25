@@ -2,9 +2,27 @@ import re
 from pathlib import Path
 
 from app.ai.ollama import _generate_json_field, _language_instruction, resolve_model
-from app.core.settings import IMAGE_EXTENSIONS, LANGUAGE_CODE, MAX_NAME_LENGTH, TOOL_BY_EXTENSION
+from app.core.settings import (
+    DEFAULT_NAME,
+    IMAGE_EXTENSIONS,
+    LANGUAGE_CODE,
+    MAX_NAME_LENGTH,
+    MIN_CONTENT_CHARS,
+    TOOL_BY_EXTENSION,
+)
 from app.tools import available_tools
 from app.tools.reads.image import read_image_bytes
+
+
+def _has_min_content(content: str | None) -> bool:
+    """
+    Returns True when the document content carries enough meaningful text
+    (at least MIN_CONTENT_CHARS alphanumeric characters) to base a
+    naming decision on.
+    """
+    if not content:
+        return False
+    return sum(ch.isalnum() for ch in content) >= MIN_CONTENT_CHARS
 
 
 def _sanitize_name(name: str) -> str:
@@ -21,13 +39,16 @@ def _sanitize_name(name: str) -> str:
     name = name.strip(' _.')
     # Limits the length
     name = name[:MAX_NAME_LENGTH].rstrip('_. ')
-    return name or 'document'
+    return name
 
 
 def rename_file(file_path: str, instruction: str = '', model: str | None = None) -> str:
     """
     Analyzes the content of a file and returns the new file name
     that the client will apply.
+
+    When the document does not provide enough information to decide,
+    returns the sentinel DEFAULT_NAME ('unassigned') instead of a guess.
 
     Supported formats: .txt, .pdf, .docx and common image formats.
 
@@ -57,6 +78,9 @@ def rename_file(file_path: str, instruction: str = '', model: str | None = None)
     except Exception as e:
         return f"Error reading the file: {e}"
 
+    if not is_image and not _has_min_content(content):
+        return DEFAULT_NAME
+
     try:
         source = 'image' if is_image else 'document'
         system = (
@@ -64,7 +88,11 @@ def rename_file(file_path: str, instruction: str = '', model: str | None = None)
             'short file name to rename it. Respond ONLY in JSON with the field '
             "'new_name', without extension, using underscores instead of spaces. "
             f"The 'new_name' value MUST be in the configured language "
-            f"('{LANGUAGE_CODE}'). {_language_instruction(LANGUAGE_CODE)}"
+            f"('{LANGUAGE_CODE}'). {_language_instruction(LANGUAGE_CODE)} "
+            'If the content does not provide enough information to infer a '
+            'meaningful name (empty text, illegible image, no discernible '
+            'subject), do NOT invent one: respond ONLY with '
+            '{"insufficient_info": true}.'
         )
         if instruction:
             system += f" Additional user requirement: {instruction}."
@@ -77,8 +105,12 @@ def rename_file(file_path: str, instruction: str = '', model: str | None = None)
     except Exception as e:
         return f"Error generating the file name: {str(e)}"
 
+    if data.get('insufficient_info'):
+        return DEFAULT_NAME
+
     name = data.get('new_name', '')
     if not isinstance(name, str) or not name.strip():
-        return 'Error: Could not generate a file name.'
+        return DEFAULT_NAME
 
-    return _sanitize_name(name)
+    sanitized = _sanitize_name(name)
+    return sanitized or DEFAULT_NAME

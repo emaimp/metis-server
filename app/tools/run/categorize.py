@@ -2,9 +2,27 @@ import re
 from pathlib import Path
 
 from app.ai.ollama import _generate_json_field, _language_instruction, resolve_model
-from app.core.settings import IMAGE_EXTENSIONS, LANGUAGE_CODE, MAX_CATEGORY_LENGTH, TOOL_BY_EXTENSION
+from app.core.settings import (
+    DEFAULT_CATEGORY,
+    IMAGE_EXTENSIONS,
+    LANGUAGE_CODE,
+    MAX_CATEGORY_LENGTH,
+    MIN_CONTENT_CHARS,
+    TOOL_BY_EXTENSION,
+)
 from app.tools import available_tools
 from app.tools.reads.image import read_image_bytes
+
+
+def _has_min_content(content: str | None) -> bool:
+    """
+    Returns True when the document content carries enough meaningful text
+    (at least MIN_CONTENT_CHARS alphanumeric characters) to base a
+    categorization decision on.
+    """
+    if not content:
+        return False
+    return sum(ch.isalnum() for ch in content) >= MIN_CONTENT_CHARS
 
 
 def _sanitize_category(name: str) -> str:
@@ -17,7 +35,7 @@ def _sanitize_category(name: str) -> str:
     name = name.strip(' _.')
     name = re.split(r'[\s_]+', name, maxsplit=1)[0]
     name = name[:MAX_CATEGORY_LENGTH].rstrip('_. ')
-    return name.lower() or 'uncategorized'
+    return name.lower()
 
 
 def categorize_file(
@@ -41,7 +59,10 @@ def categorize_file(
         model: Override the Ollama model for this call.
 
     Returns:
-        The category (folder name) on success, or an 'Error: ...' string.
+        The category (folder name) on success. When the document does not
+        provide enough information to decide, returns the sentinel
+        DEFAULT_CATEGORY ('uncategorized'). Real failures (missing file,
+        unsupported type, unreadable content) return an 'Error: ...' string.
     """
     path = Path(file_path)
     if not path.exists() or not path.is_file():
@@ -67,6 +88,9 @@ def categorize_file(
     except Exception as e:
         return f"Error reading the file: {e}"
 
+    if not is_image and not _has_min_content(content):
+        return DEFAULT_CATEGORY
+
     try:
         source = 'image' if is_image else 'document'
         system = (
@@ -75,8 +99,10 @@ def categorize_file(
             'Respond ONLY in JSON with the field "category": a SINGLE WORD, '
             'without extension, spaces, or underscores. Always use the same, '
             'consistent category across documents. '
-            "Never respond 'unknown' or 'uncategorized': always pick the closest "
-            f'meaningful topic based on the content. The file name is only a hint. '
+            f"The file name is only a hint; base the decision on the content. "
+            f"If the content does not provide enough information to identify "
+            f"a meaningful topic, do NOT guess: respond ONLY with "
+            f'{{"insufficient_info": true}}. '
             f"The 'category' value MUST be a single word in the configured "
             f"language ('{LANGUAGE_CODE}'), even when the document content or "
             f'existing categories are in another language. '
@@ -94,8 +120,6 @@ def categorize_file(
         user = f'File name: {stem}\n'
         if content:
             user += f'Content:\n{content}\n'
-        elif not is_image:
-            user += 'No content provided; classify based on the file name only.'
 
         data = _generate_json_field(
             'category', system, user, resolve_model(model),
@@ -104,8 +128,12 @@ def categorize_file(
     except Exception as e:
         return f'Error generating the category: {str(e)}'
 
+    if data.get('insufficient_info'):
+        return DEFAULT_CATEGORY
+
     category = data.get('category', '')
     if not isinstance(category, str) or not category.strip():
-        return 'Error: Could not generate a category.'
+        return DEFAULT_CATEGORY
 
-    return _sanitize_category(category)
+    sanitized = _sanitize_category(category)
+    return sanitized or DEFAULT_CATEGORY

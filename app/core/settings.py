@@ -21,7 +21,11 @@ DEFAULT_NAME = 'unassigned'
 
 DEFAULT_CATEGORY = 'uncategorized'
 
-MAX_NAME_LENGTH = 30
+# Maximum words a generated file name may have (underscore-separated).
+MAX_NAME_WORDS = 3
+
+# Character cap applied after the word limit; legitimate names never reach it.
+MAX_NAME_LENGTH = 60
 
 MAX_CATEGORY_LENGTH = 30
 

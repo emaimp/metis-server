@@ -7,6 +7,7 @@ from app.core.settings import (
     IMAGE_EXTENSIONS,
     LANGUAGE_CODE,
     MAX_NAME_LENGTH,
+    MAX_NAME_WORDS,
     MIN_UNIQUE_WORDS,
     TOOL_BY_EXTENSION,
 )
@@ -26,7 +27,7 @@ def _has_min_content(content: str | None) -> bool:
 
 def _sanitize_name(name: str) -> str:
     """
-    Cleans the suggested name so it is valid as a file name.
+    Cleans the suggested name so it is valid as a file name, keeping at most MAX_NAME_WORDS and MAX_NAME_LENGTH.
     """
     # Invalid characters in file systems and control characters
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', name)
@@ -36,9 +37,11 @@ def _sanitize_name(name: str) -> str:
     name = re.sub(r'\.\w{1,5}$', '', name)
     # Trims extra separators and whitespace
     name = name.strip(' _.')
-    # Limits the length
-    name = name[:MAX_NAME_LENGTH].rstrip('_. ')
-    return name
+    # Keeps only the first MAX_NAME_WORDS words
+    words = [w for w in name.split('_') if w][:MAX_NAME_WORDS]
+    name = '_'.join(words)
+    # Emergency cap against degenerate output or instruction abuse
+    return name[:MAX_NAME_LENGTH]
 
 
 def rename_file(file_path: str, instruction: str = '', model: str | None = None) -> str:
@@ -85,7 +88,8 @@ def rename_file(file_path: str, instruction: str = '', model: str | None = None)
         system = (
             f'Analyze the {source} and generate a descriptive, '
             'short file name to rename it. Respond ONLY in JSON with the field '
-            "'new_name', without extension, using underscores instead of spaces. "
+            "'new_name', without extension, using at most "
+            f'{MAX_NAME_WORDS} words separated by underscores. '
             f"The 'new_name' value MUST be in the configured language "
             f"('{LANGUAGE_CODE}'). {_language_instruction(LANGUAGE_CODE)} "
             'If the content does not provide enough information to infer a '

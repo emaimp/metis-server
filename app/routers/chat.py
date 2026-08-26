@@ -87,6 +87,7 @@ async def chat(
     image: UploadFile = File(None),
     document: UploadFile = File(None),
     existing_categories: str = Form(''),
+    existing_files: str = Form(''),
 ):
     """
     Free chat with the model. Image and document (.txt, .pdf, .docx) are optional:
@@ -150,8 +151,12 @@ async def chat(
 
         if rename_requested:
             instruction = RENAME_MENTION_PATTERN.sub('', message).strip()
+            files = (
+                [f.strip() for f in existing_files.split(',') if f.strip()]
+                if existing_files else None
+            )
             result = await run_in_threadpool(
-                rename_file, temp_path, instruction, effective_model,
+                rename_file, temp_path, files, instruction, effective_model,
             )
             new_name = _require_tool_result(
                 result, 'The tool did not generate a file name',

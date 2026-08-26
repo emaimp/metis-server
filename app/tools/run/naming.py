@@ -44,7 +44,22 @@ def _sanitize_name(name: str) -> str:
     return name[:MAX_NAME_LENGTH]
 
 
-def rename_file(file_path: str, instruction: str = '', model: str | None = None) -> str:
+def _filter_existing_by_extension(
+    target_ext: str, existing_files: list[str] | None
+) -> list[str] | None:
+    """Return only names whose extension matches the target file exactly."""
+    if not existing_files:
+        return None
+    filtered = [f for f in existing_files if Path(f).suffix.lower() == target_ext]
+    return filtered or None
+
+
+def rename_file(
+    file_path: str,
+    existing_files: list[str] | None = None,
+    instruction: str = '',
+    model: str | None = None,
+) -> str:
     """
     Analyzes the content of a file and returns the new file name
     that the client will apply.
@@ -56,10 +71,17 @@ def rename_file(file_path: str, instruction: str = '', model: str | None = None)
 
     Args:
         file_path: The path to the document to rename.
+        existing_files: Names already present in the target folder; only
+            those with the same extension as the analyzed file are
+            considered to avoid duplicates.
         instruction: Additional user requirement for the new name.
         model: Override the Ollama model for this call.
     """
-    ext = Path(file_path).suffix.lower()
+    path = Path(file_path)
+    if not path.exists() or not path.is_file():
+        return f"Error: The file '{file_path}' does not exist."
+
+    ext = path.suffix.lower()
     is_image = ext in IMAGE_EXTENSIONS
 
     try:
@@ -99,6 +121,13 @@ def rename_file(file_path: str, instruction: str = '', model: str | None = None)
         )
         if instruction:
             system += f" Additional user requirement: {instruction}."
+        filtered = _filter_existing_by_extension(ext, existing_files)
+        if filtered:
+            system += (
+                ' The following file names already exist for this file type; '
+                'generate a DIFFERENT name that does not duplicate any of them: '
+                f"{', '.join(filtered)}."
+            )
 
         user = content if content else ''
         data = _generate_json_field(

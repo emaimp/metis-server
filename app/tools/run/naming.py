@@ -84,15 +84,15 @@ def rename_file(
     ext = path.suffix.lower()
     is_image = ext in IMAGE_EXTENSIONS
 
+    if not is_image and ext not in TOOL_BY_EXTENSION:
+        return f"Error: Unsupported file extension '{ext}'."
+
     try:
         if is_image:
-            image_data = read_image_bytes(file_path)
+            image_data = read_image_bytes(str(path))
             content = None
         else:
-            tool_name = TOOL_BY_EXTENSION.get(ext)
-            reader = available_tools.get(tool_name) if tool_name else None
-            if reader is None:
-                return f"Error: Unsupported file extension '{ext}' for renaming."
+            reader = available_tools[TOOL_BY_EXTENSION[ext]]
             content = reader(file_path)
             if content.startswith('Error'):
                 return content

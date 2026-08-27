@@ -47,8 +47,7 @@ def categorize_file(
     Analyzes a file and returns its category. The frontend is responsible
     for creating the category folder and moving the file into it.
 
-    The file content is always analyzed; the file name is only used as
-    an additional hint for the model.
+    Categorization is 100% content-based; the file name is not considered.
 
     Supported formats: .txt, .pdf, .docx and common image formats.
 
@@ -73,9 +72,8 @@ def categorize_file(
     is_image = ext in IMAGE_EXTENSIONS
 
     if not is_image and ext not in TOOL_BY_EXTENSION:
-        return f"Error: Unsupported file extension '{ext}' for categorization."
+        return f"Error: Unsupported file extension '{ext}'."
 
-    stem = path.stem
     try:
         if is_image:
             image_data = read_image_bytes(str(path))
@@ -100,7 +98,7 @@ def categorize_file(
             'Respond ONLY in JSON with the field "category": a SINGLE WORD, '
             'without extension, spaces, or underscores. Always use the same, '
             'consistent category across documents. '
-            f"The file name is only a hint; base the decision on the content. "
+            'Base the decision solely on the content. '
             f"If the content does not provide enough information to identify "
             f"a meaningful topic, do NOT guess: respond ONLY with "
             f'{{"insufficient_info": true}}. '
@@ -120,9 +118,7 @@ def categorize_file(
         if instruction:
             system += f" Additional user requirement: {instruction}."
 
-        user = f'File name: {stem}\n'
-        if content:
-            user += f'Content:\n{content}\n'
+        user = f'Content:\n{content}\n' if content else ''
 
         data = _generate_json_field(
             'category', system, user, resolve_model(model),

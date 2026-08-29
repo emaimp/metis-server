@@ -109,10 +109,10 @@ def categorize_file(
         )
         if existing_categories:
             system += (
-                ' Reuse the concept of an existing category only when it fits, '
-                'but ALWAYS output the "category" value in the configured '
-                'language, translating the existing name if needed. Existing '
-                'categories (possibly in another language): '
+                ' Only reuse an existing category when it is already in the '
+                f"configured language ('{LANGUAGE_CODE}') and its meaning fits; "
+                'otherwise generate a new category in that language. '
+                'Do not translate existing names. Existing categories: '
                 f"{', '.join(existing_categories)}."
             )
         if instruction:

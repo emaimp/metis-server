@@ -88,6 +88,8 @@ async def chat(
     document: UploadFile = File(None),
     existing_categories: str = Form(''),
     existing_files: str = Form(''),
+    tts: bool = Form(False),
+    voice: str = Form(None),
 ):
     """
     Free chat with the model. Image and document (.txt, .pdf, .docx) are optional:
@@ -190,4 +192,44 @@ async def chat(
         if temp_path is not None:
             Path(temp_path).unlink(missing_ok=True)
 
-    return {'response': _redact_path(response, temp_path)}
+    cleaned = _redact_path(response, temp_path)
+
+    # Optional TTS: synthesize full response to base64 WAV (pure TTS + encoding)
+    if tts:
+        # Tool branches already returned; this only applies to normal chat
+        if not cleaned or not cleaned.strip():
+            raise HTTPException(status_code=502, detail="Empty model response, cannot synthesize TTS")
+        try:
+            from app.ai.omnivoice import SAMPLE_RATE, synthesize
+            from app.ai.tts.encoding import ndarray_to_wav_bytes, wav_bytes_to_base64
+            from app.core.markdown import strip_markdown
+
+            tts_text = strip_markdown(cleaned)
+            if not tts_text or not tts_text.strip():
+                raise HTTPException(
+                    status_code=502,
+                    detail="Model response contains no speakable text after markdown stripping",
+                )
+
+            def _tts_sync() -> str:
+                audio, sr = synthesize(tts_text, instruct=voice)
+                wav = ndarray_to_wav_bytes(audio, sr)
+                return wav_bytes_to_base64(wav)
+
+            audio_base64 = await run_in_threadpool(_tts_sync)
+        except HTTPException:
+            raise
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"TTS generation failed: {e}")
+        return {
+            "response": cleaned,
+            "audio_base64": audio_base64,
+            "mime_type": "audio/wav",
+            "sample_rate": SAMPLE_RATE,
+        }
+
+    return {'response': cleaned}

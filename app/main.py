@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from app.routers.chat import router as chat_router
 from app.routers.models import router as models_router
+from app.routers.voices import router as voices_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,3 +23,4 @@ app.add_middleware(
 
 app.include_router(chat_router)
 app.include_router(models_router)
+app.include_router(voices_router)

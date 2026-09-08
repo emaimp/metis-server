@@ -104,48 +104,43 @@ def test_delete_chat_cascades_messages(test_db):
 
 def test_add_messages_with_attachments(test_db):
     chat = repo.create_chat_db(None)
-    user_ts = '2026-01-01T00:00:00.000000Z'
-    assistant_ts = '2026-01-01T00:00:00.000001Z'
-    attachments = [
-        {'filename': 'doc.txt', 'content_type': 'text/plain', 'data': b'hola mundo'},
-        {'filename': 'img.png', 'content_type': 'image/png', 'data': b'\x89PNGfake'},
-    ]
-    u, a = repo.add_messages_db(chat['id'], 'hi', 'res', None, 0, user_ts, assistant_ts, attachments)
-    assert len(u['attachments']) == 2
-    assert u['attachments'][0]['filename'] == 'doc.txt'
-    assert a['attachments'] == []
-    got = repo.get_chat_db(chat['id'])
+    u, a = repo.add_messages_db(chat['id'], 'hi', 'res', None, 0, now_iso(), now_iso())
+    # Unlinked attachments do not appear in the chat detail yet
+    att1 = repo.create_attachment_db(chat['id'], 'doc.txt', 'text/plain', b'hola mundo')
+    att2 = repo.create_attachment_db(chat['id'], 'img.png', 'image/png', b'\x89PNGfake')
+    detail = repo.get_chat_db(chat['id'])
+    assert detail['messages'][0]['attachments'] == []
+    # Link them to the user message: now they appear
+    repo.link_attachments_to_message_db([att1['id'], att2['id']], u['id'])
+    detail = repo.get_chat_db(chat['id'])
+    user_atts = detail['messages'][0]['attachments']
+    assert [x['id'] for x in user_atts] == [att1['id'], att2['id']]
+    assert user_atts[0]['filename'] == 'doc.txt'
+    assert user_atts[1]['content_type'] == 'image/png'
+    # Raw data retrievable by id
+    got = repo.get_attachment_db(chat['id'], att1['id'])
     assert got is not None
-    user_msg = got['messages'][0]
-    assert user_msg['attachments'][0]['id'] == u['attachments'][0]['id']
-    assert user_msg['attachments'][1]['content_type'] == 'image/png'
-    att = repo.get_attachment_db(chat['id'], u['attachments'][0]['id'])
-    assert att is not None
-    assert att['data'] == b'hola mundo'
-    assert att['size'] == 10
+    assert got['data'] == b'hola mundo'
+    assert got['size'] == 10
+
+
+def test_create_attachment_missing_chat_raises(test_db):
+    with pytest.raises(ValueError):
+        repo.create_attachment_db('no-existe', 'a.txt', 'text/plain', b'x')
 
 
 def test_get_attachment_wrong_chat_returns_none(test_db):
     c1 = repo.create_chat_db('A')
     c2 = repo.create_chat_db('B')
-    u, _ = repo.add_messages_db(
-        c1['id'], 'hi', 'res', None, 0, now_iso(), now_iso(),
-        [{'filename': 'a.txt', 'content_type': 'text/plain', 'data': b'x'}],
-    )
-    att_id = u['attachments'][0]['id']
-    assert repo.get_attachment_db(c2['id'], att_id) is None
+    att = repo.create_attachment_db(c1['id'], 'a.txt', 'text/plain', b'x')
+    assert repo.get_attachment_db(c2['id'], att['id']) is None
 
 
 def test_delete_chat_cascades_attachments(test_db):
     chat = repo.create_chat_db('A')
-    u, _ = repo.add_messages_db(
-        chat['id'], 'hi', 'res', None, 0, now_iso(), now_iso(),
-        [{'filename': 'a.txt', 'content_type': 'text/plain', 'data': b'x'}],
-    )
-    att_id = u['attachments'][0]['id']
-    assert repo.get_attachment_db(chat['id'], att_id) is not None
+    att = repo.create_attachment_db(chat['id'], 'a.txt', 'text/plain', b'x')
     repo.delete_chat_db(chat['id'])
-    assert repo.get_attachment_db(chat['id'], att_id) is None
+    assert repo.get_attachment_db(chat['id'], att['id']) is None
 
 
 def test_add_audio_and_get(test_db):

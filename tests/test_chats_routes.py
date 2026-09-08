@@ -164,7 +164,15 @@ def test_create_message_empty_response(client, monkeypatch):
     assert resp.status_code == 502
 
 
-def test_create_message_with_document(client):
+def test_create_message_with_document(client, monkeypatch):
+    captured = {}
+
+    def _fake_ask_chat(message, image=None, available_tools=None, tool_hint=None, model=None):
+        captured['tool_hint'] = tool_hint
+        captured['tool_names'] = sorted((available_tools or {}).keys())
+        return 'Respuesta simulada del modelo'
+
+    monkeypatch.setattr('app.routers.chats.ask_chat', _fake_ask_chat)
     chat = _create_chat(client)
     content = b'contenido de prueba del documento'
     resp = client.post(
@@ -181,6 +189,10 @@ def test_create_message_with_document(client):
     assert att['content_type'] == 'text/plain'
     assert att['size'] == len(content)
     assert data['chat']['messages'][0]['attachments'][0]['id'] == att['id']
+    # Read tools come from the database and the hint references the attachment id
+    assert captured['tool_names'] == ['read_docx', 'read_pdf', 'read_txt']
+    assert att['id'] in captured['tool_hint']
+    assert 'nota.txt' in captured['tool_hint']
 
 
 def test_create_message_with_image(client):
@@ -377,3 +389,100 @@ def test_download_audio_not_found(client):
     chat = _create_chat(client)
     r = client.get(f"/chats/{chat['id']}/audios/no-existe")
     assert r.status_code == 404
+
+
+def test_create_message_rename_tool(client, monkeypatch):
+    captured = {}
+
+    def _fake_rename_file(file_path, existing_files=None, instruction='', model=None):
+        captured['instruction'] = instruction
+        captured['existing_files'] = existing_files
+        return 'factura_2026'
+
+    monkeypatch.setattr('app.routers.chats.rename_file', _fake_rename_file)
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages",
+        data={
+            'message': '@tool_rename usa formato fecha_name',
+            'existing_files': 'otro.pdf,doc2.pdf',
+        },
+        files={'document': ('contrato.pdf', b'pdf-bytes', 'application/pdf')},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['new_name'] == 'factura_2026'
+    assert captured['instruction'] == 'usa formato fecha_name'
+    assert captured['existing_files'] == ['otro.pdf', 'doc2.pdf']
+    # The exchange is persisted: user message (as typed) + assistant message (result)
+    assert data['user_message']['content'] == '@tool_rename usa formato fecha_name'
+    assert data['assistant_message']['content'] == 'factura_2026'
+    assert data['user_message']['attachments'][0]['filename'] == 'contrato.pdf'
+    detail = client.get(f"/chats/{chat['id']}").json()
+    assert len(detail['messages']) == 2
+    assert detail['messages'][0]['attachments'][0]['id'] == data['user_message']['attachments'][0]['id']
+
+
+def test_create_message_categorize_tool(client, monkeypatch):
+    def _fake_categorize(file_path, existing_categories=None, instruction='', model=None):
+        assert instruction == 'es una factura'
+        assert existing_categories == ['contratos', 'facturas']
+        return 'facturas'
+
+    monkeypatch.setattr('app.routers.chats.categorize_file', _fake_categorize)
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages",
+        data={'message': '@tool_categorize es una factura', 'existing_categories': 'contratos,facturas'},
+        files={'document': ('doc.pdf', b'pdf-bytes', 'application/pdf')},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['category'] == 'facturas'
+    assert data['assistant_message']['content'] == 'facturas'
+
+
+def test_create_message_rename_unassigned_persists(client, monkeypatch):
+    monkeypatch.setattr('app.routers.chats.rename_file', lambda *args, **kwargs: 'unassigned')
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages",
+        data={'message': '@tool_rename'},
+        files={'document': ('doc.txt', b'x', 'text/plain')},
+    )
+    assert resp.status_code == 200
+    assert resp.json()['new_name'] == 'unassigned'
+    detail = client.get(f"/chats/{chat['id']}").json()
+    assert len(detail['messages']) == 2
+
+
+def test_create_message_rename_error_compensates(client, monkeypatch):
+    monkeypatch.setattr('app.routers.chats.rename_file', lambda *args, **kwargs: 'Error: unreadable document')
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages",
+        data={'message': '@tool_rename'},
+        files={'document': ('doc.txt', b'x', 'text/plain')},
+    )
+    assert resp.status_code == 502
+    # Nothing persisted: the chat has no messages (attachment compensated away)
+    detail = client.get(f"/chats/{chat['id']}").json()
+    assert detail['messages'] == []
+
+
+def test_create_message_unknown_tool(client):
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages",
+        data={'message': '@tool_translate hola'},
+        files={'document': ('doc.txt', b'x', 'text/plain')},
+    )
+    assert resp.status_code == 400
+    assert "Unknown tool '@tool_translate'" in resp.json()['detail']
+
+
+def test_create_message_mention_without_attachment(client):
+    chat = _create_chat(client)
+    resp = client.post(f"/chats/{chat['id']}/messages", data={'message': '@tool_rename hola'})
+    assert resp.status_code == 400
+    assert resp.json()['detail'] == 'Tool mentions require an attached document or image'

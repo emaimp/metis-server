@@ -251,3 +251,129 @@ def test_create_message_image_too_large(client, monkeypatch):
         files={'image': ('foto.png', b'large-bytes', 'image/png')},
     )
     assert resp.status_code == 400
+
+
+def test_create_message_with_tts(client, monkeypatch):
+    calls = []
+
+    def _fake_synthesize(text, ref_audio_path=None, ref_text=None, instruct=None):
+        import numpy as np
+
+        calls.append({'text': text, 'instruct': instruct})
+        return np.zeros(2400, dtype=np.float32), 24000
+
+    monkeypatch.setattr('app.ai.omnivoice.synthesize', _fake_synthesize)
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages",
+        data={'message': 'Hola', 'tts': 'true'},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert calls and calls[0]['text'] == 'Respuesta simulada del modelo'
+    audio = data['assistant_message']['audio']
+    assert audio is not None
+    assert audio['mime_type'] == 'audio/wav'
+    assert audio['sample_rate'] == 24000
+    assert data['mime_type'] == 'audio/wav'
+    assert data['sample_rate'] == 24000
+    import base64
+
+    assert base64.b64decode(data['audio_base64']).startswith(b'RIFF')
+    # Stored audio is downloadable
+    dl = client.get(f"/chats/{chat['id']}/audios/{audio['id']}")
+    assert dl.status_code == 200
+    assert dl.headers['content-type'] == 'audio/wav'
+    assert dl.content.startswith(b'RIFF')
+
+
+def test_create_message_without_tts_has_no_audio(client):
+    chat = _create_chat(client)
+    resp = client.post(f"/chats/{chat['id']}/messages", data={'message': 'Hola'})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['assistant_message']['audio'] is None
+    assert data['audio_base64'] is None
+
+
+def test_create_message_tts_no_speakable(client, monkeypatch):
+    monkeypatch.setattr('app.routers.chats.strip_markdown', lambda text: '')
+    chat = _create_chat(client)
+    resp = client.post(f"/chats/{chat['id']}/messages", data={'message': 'Hola', 'tts': 'true'})
+    assert resp.status_code == 502
+    assert 'no speakable' in resp.json()['detail']
+
+
+def test_create_message_tts_invalid_voice(client, monkeypatch):
+    def _fake_synthesize(*args, **kwargs):
+        raise ValueError('Invalid instruct attribute(s): male, female')
+
+    monkeypatch.setattr('app.ai.omnivoice.synthesize', _fake_synthesize)
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages",
+        data={'message': 'Hola', 'tts': 'true', 'voice': 'male, female'},
+    )
+    assert resp.status_code == 400
+
+
+def test_create_message_tts_failure_keeps_messages(client, monkeypatch):
+    def _fake_synthesize(*args, **kwargs):
+        raise RuntimeError('CUDA out of memory')
+
+    monkeypatch.setattr('app.ai.omnivoice.synthesize', _fake_synthesize)
+    chat = _create_chat(client)
+    resp = client.post(f"/chats/{chat['id']}/messages", data={'message': 'Hola', 'tts': 'true'})
+    assert resp.status_code == 502
+    assert resp.json()['detail'].startswith('TTS generation failed')
+    # The exchange remains persisted; the audio can be regenerated on demand
+    detail = client.get(f"/chats/{chat['id']}").json()
+    assert len(detail['messages']) == 2
+    assert detail['messages'][1]['audio'] is None
+
+
+def test_generate_audio_on_demand(client, monkeypatch):
+    calls = []
+
+    def _fake_synthesize(text, ref_audio_path=None, ref_text=None, instruct=None):
+        import numpy as np
+
+        calls.append(text)
+        return np.zeros(2400, dtype=np.float32), 24000
+
+    monkeypatch.setattr('app.ai.omnivoice.synthesize', _fake_synthesize)
+    chat = _create_chat(client)
+    resp = client.post(f"/chats/{chat['id']}/messages", data={'message': 'Hola'})
+    msg_id = resp.json()['assistant_message']['id']
+    first = client.post(f"/chats/{chat['id']}/messages/{msg_id}/audio")
+    assert first.status_code == 200
+    audio_id = first.json()['audio']['id']
+    assert first.json()['audio_base64']
+    # Linked to the assistant message
+    detail = client.get(f"/chats/{chat['id']}").json()
+    assert detail['messages'][1]['audio']['id'] == audio_id
+    # Idempotent: second call returns the stored audio without regenerating
+    second = client.post(f"/chats/{chat['id']}/messages/{msg_id}/audio")
+    assert second.status_code == 200
+    assert second.json()['audio']['id'] == audio_id
+    assert len(calls) == 1
+
+
+def test_generate_audio_on_demand_user_message_rejected(client):
+    chat = _create_chat(client)
+    resp = client.post(f"/chats/{chat['id']}/messages", data={'message': 'Hola'})
+    user_id = resp.json()['user_message']['id']
+    r = client.post(f"/chats/{chat['id']}/messages/{user_id}/audio")
+    assert r.status_code == 400
+
+
+def test_generate_audio_missing_message(client):
+    chat = _create_chat(client)
+    r = client.post(f"/chats/{chat['id']}/messages/no-existe/audio")
+    assert r.status_code == 404
+
+
+def test_download_audio_not_found(client):
+    chat = _create_chat(client)
+    r = client.get(f"/chats/{chat['id']}/audios/no-existe")
+    assert r.status_code == 404

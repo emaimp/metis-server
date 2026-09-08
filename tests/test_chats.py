@@ -146,3 +146,52 @@ def test_delete_chat_cascades_attachments(test_db):
     assert repo.get_attachment_db(chat['id'], att_id) is not None
     repo.delete_chat_db(chat['id'])
     assert repo.get_attachment_db(chat['id'], att_id) is None
+
+
+def test_add_audio_and_get(test_db):
+    chat = repo.create_chat_db(None)
+    u, a = repo.add_messages_db(chat['id'], 'hi', 'res', None, 0, now_iso(), now_iso())
+    wav = b'RIFFfake-wav-bytes'
+    meta = repo.add_audio_db(chat['id'], a['id'], wav, 24000)
+    assert meta['mime_type'] == 'audio/wav'
+    assert meta['size'] == len(wav)
+    got = repo.get_audio_db(chat['id'], meta['id'])
+    assert got is not None
+    assert got['data'] == wav
+    assert got['sample_rate'] == 24000
+    detail = repo.get_chat_db(chat['id'])
+    assert detail['messages'][1]['audio']['id'] == meta['id']
+    assert detail['messages'][0]['audio'] is None
+
+
+def test_add_audio_replaces_existing(test_db):
+    chat = repo.create_chat_db(None)
+    u, a = repo.add_messages_db(chat['id'], 'hi', 'res', None, 0, now_iso(), now_iso())
+    m1 = repo.add_audio_db(chat['id'], a['id'], b'first', 24000)
+    m2 = repo.add_audio_db(chat['id'], a['id'], b'second-wav', 24000)
+    assert m2['id'] != m1['id']
+    assert repo.get_audio_db(chat['id'], m1['id']) is None
+    assert repo.get_audio_db(chat['id'], m2['id'])['data'] == b'second-wav'
+
+
+def test_add_audio_missing_message_raises(test_db):
+    chat = repo.create_chat_db(None)
+    with pytest.raises(ValueError):
+        repo.add_audio_db(chat['id'], 'no-existe', b'x', 24000)
+
+
+def test_get_message_db(test_db):
+    chat = repo.create_chat_db(None)
+    u, a = repo.add_messages_db(chat['id'], 'hi', 'res', None, 0, now_iso(), now_iso())
+    got = repo.get_message_db(chat['id'], a['id'])
+    assert got is not None
+    assert got['role'] == 'assistant'
+    assert repo.get_message_db(chat['id'], 'no-existe') is None
+
+
+def test_delete_chat_cascades_audios(test_db):
+    chat = repo.create_chat_db(None)
+    u, a = repo.add_messages_db(chat['id'], 'hi', 'res', None, 0, now_iso(), now_iso())
+    meta = repo.add_audio_db(chat['id'], a['id'], b'wav', 24000)
+    repo.delete_chat_db(chat['id'])
+    assert repo.get_audio_db(chat['id'], meta['id']) is None

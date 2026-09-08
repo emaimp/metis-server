@@ -39,6 +39,18 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_chats_updated_at ON chats(updated_at);
+            CREATE TABLE IF NOT EXISTS attachments (
+                id TEXT PRIMARY KEY,
+                chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                filename TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                data BLOB NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
+            CREATE INDEX IF NOT EXISTS idx_attachments_chat_id ON attachments(chat_id);
             """
         )
         conn.commit()

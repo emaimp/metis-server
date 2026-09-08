@@ -44,3 +44,18 @@ TOOL_BY_EXTENSION = {
     '.webp': 'read_image',
     '.bmp': 'read_image',
 }
+
+# Maximum size allowed for uploaded documents/images (in bytes). 10 MB.
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+MIME_BY_EXTENSION = {
+    '.txt': 'text/plain',
+    '.pdf': 'application/pdf',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+}

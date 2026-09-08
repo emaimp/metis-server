@@ -26,6 +26,14 @@ class ChatListItem(ChatBase):
     message_count: int
 
 
+class AttachmentMeta(BaseModel):
+    """Metadata of a file attached to a message (the raw bytes are served separately)."""
+    id: str
+    filename: str
+    content_type: str
+    size: int
+
+
 class MessageModel(BaseModel):
     id: str
     chat_id: str
@@ -34,6 +42,7 @@ class MessageModel(BaseModel):
     model: str | None = None
     created_at: str
     response_time_ms: int | None = None
+    attachments: list[AttachmentMeta] = []
 
 
 class ChatDetailResponse(ChatBase):
@@ -43,11 +52,6 @@ class ChatDetailResponse(ChatBase):
 
 class UpdateTitleRequest(BaseModel):
     title: str
-
-
-class CreateMessageRequest(BaseModel):
-    message: str
-    model: str | None = None
 
 
 class CreateMessageResponse(BaseModel):

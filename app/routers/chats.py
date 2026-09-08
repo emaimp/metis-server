@@ -16,7 +16,6 @@ from app.core.time_utils import now_iso
 from app.core.uploads import (
     build_attachment_hint,
     content_type_for,
-    save_temp_bytes,
     validate_upload,
 )
 from app.repositories.chats import (
@@ -233,11 +232,9 @@ async def create_message(
     user_created_at = now_iso()
     # Action tools: @tool_rename / @tool_categorize (require an attachment, persisted above)
     if rename_requested or categorize_requested:
-        target_meta = document_meta if document_meta is not None else image_meta
         target_data = document_data if document_data is not None else image_data
         target_ext = document_ext if document_ext is not None else image_ext
         t0 = time.perf_counter()
-        temp_path = save_temp_bytes(target_data, target_ext)
         try:
             if rename_requested:
                 instruction = RENAME_MENTION_PATTERN.sub("", message).strip()
@@ -247,7 +244,7 @@ async def create_message(
                     else None
                 )
                 result = await run_in_threadpool(
-                    rename_file, temp_path, files, instruction, effective_model,
+                    rename_file, target_data, target_ext, files, instruction, effective_model,
                 )
                 result = _require_tool_result(result, "The tool did not generate a file name")
             else:
@@ -258,7 +255,7 @@ async def create_message(
                     else None
                 )
                 result = await run_in_threadpool(
-                    categorize_file, temp_path, categories, instruction, effective_model,
+                    categorize_file, target_data, target_ext, categories, instruction, effective_model,
                 )
                 result = _require_tool_result(result, "The tool did not categorize the file")
         except HTTPException:
@@ -268,8 +265,6 @@ async def create_message(
             logger.exception("Tool execution failed")
             await _discard_pending_attachments()
             raise HTTPException(status_code=502, detail=f"Error running the tool: {e}")
-        finally:
-            Path(temp_path).unlink(missing_ok=True)
         t1 = time.perf_counter()
         response_time_ms = int((t1 - t0) * 1000)
 

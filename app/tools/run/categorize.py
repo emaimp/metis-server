@@ -1,5 +1,4 @@
 import re
-from pathlib import Path
 
 from app.ai.ollama import _generate_json_field, _language_instruction, resolve_model
 from app.core.settings import (
@@ -8,10 +7,16 @@ from app.core.settings import (
     LANGUAGE_CODE,
     MAX_CATEGORY_LENGTH,
     MIN_UNIQUE_WORDS,
-    TOOL_BY_EXTENSION,
 )
-from app.tools import available_tools
-from app.reads.image import read_image_bytes
+from app.reads.docx import extract_docx_from_bytes
+from app.reads.pdf import extract_pdf_from_bytes
+from app.reads.txt import extract_txt_from_bytes
+
+_EXTRACT_BY_EXT = {
+    '.txt': extract_txt_from_bytes,
+    '.pdf': extract_pdf_from_bytes,
+    '.docx': extract_docx_from_bytes,
+}
 
 
 def _has_min_content(content: str | None) -> bool:
@@ -37,22 +42,29 @@ def _sanitize_category(name: str) -> str:
     return name.lower()
 
 
+def _normalized_extension(extension: str) -> str:
+    ext = extension.lower()
+    return ext if ext.startswith(".") else f".{ext}"
+
+
 def categorize_file(
-    file_path: str,
+    data: bytes,
+    extension: str,
     existing_categories: list[str] | None = None,
     instruction: str = '',
     model: str | None = None,
 ) -> str:
     """
-    Analyzes a file and returns its category. The frontend is responsible
-    for creating the category folder and moving the file into it.
+    Analyzes an uploaded file (as bytes) and returns its category. The frontend
+    is responsible for creating the category folder and moving the file into it.
 
     Categorization is 100% content-based; the file name is not considered.
 
     Supported formats: .txt, .pdf, .docx and common image formats.
 
     Args:
-        file_path: The path to the document to categorize.
+        data: The raw bytes of the file to analyze.
+        extension: The file extension (with or without leading dot).
         existing_categories: Category names the frontend already has,
             so the model can reuse them for consistency.
         instruction: Additional user requirement steering the category.
@@ -61,31 +73,23 @@ def categorize_file(
     Returns:
         The category (folder name) on success. When the document does not
         provide enough information to decide, returns the sentinel
-        DEFAULT_CATEGORY ('uncategorized'). Real failures (missing file,
-        unsupported type, unreadable content) return an 'Error: ...' string.
+        DEFAULT_CATEGORY ('uncategorized'). Real failures (unsupported type,
+        unreadable content) return an 'Error: ...' string.
     """
-    path = Path(file_path)
-    if not path.exists() or not path.is_file():
-        return f"Error: The file '{file_path}' does not exist."
-
-    ext = path.suffix.lower()
+    ext = _normalized_extension(extension)
     is_image = ext in IMAGE_EXTENSIONS
 
-    if not is_image and ext not in TOOL_BY_EXTENSION:
+    if not is_image and ext not in _EXTRACT_BY_EXT:
         return f"Error: Unsupported file extension '{ext}'."
 
-    try:
-        if is_image:
-            image_data = read_image_bytes(str(path))
-            content = None
-        else:
-            reader = available_tools.get(TOOL_BY_EXTENSION[ext])
-            content = reader(str(path))
-            if content.startswith('Error'):
-                return content
-            image_data = None
-    except Exception as e:
-        return f"Error reading the file: {e}"
+    if is_image:
+        image_data = data
+        content = None
+    else:
+        content = _EXTRACT_BY_EXT[ext](data)
+        if content.startswith('Error'):
+            return content
+        image_data = None
 
     if not is_image and not _has_min_content(content):
         return DEFAULT_CATEGORY

@@ -1,5 +1,4 @@
 import re
-from pathlib import Path
 
 from app.ai.ollama import _generate_json_field, _language_instruction, resolve_model
 from app.core.settings import (
@@ -9,10 +8,16 @@ from app.core.settings import (
     MAX_NAME_LENGTH,
     MAX_NAME_WORDS,
     MIN_UNIQUE_WORDS,
-    TOOL_BY_EXTENSION,
 )
-from app.tools import available_tools
-from app.reads.image import read_image_bytes
+from app.reads.docx import extract_docx_from_bytes
+from app.reads.pdf import extract_pdf_from_bytes
+from app.reads.txt import extract_txt_from_bytes
+
+_EXTRACT_BY_EXT = {
+    '.txt': extract_txt_from_bytes,
+    '.pdf': extract_pdf_from_bytes,
+    '.docx': extract_docx_from_bytes,
+}
 
 
 def _has_min_content(content: str | None) -> bool:
@@ -50,19 +55,25 @@ def _filter_existing_by_extension(
     """Return only names whose extension matches the target file exactly."""
     if not existing_files:
         return None
-    filtered = [f for f in existing_files if Path(f).suffix.lower() == target_ext]
+    filtered = [f for f in existing_files if f.lower().endswith(target_ext)]
     return filtered or None
 
 
+def _normalized_extension(extension: str) -> str:
+    ext = extension.lower()
+    return ext if ext.startswith(".") else f".{ext}"
+
+
 def rename_file(
-    file_path: str,
+    data: bytes,
+    extension: str,
     existing_files: list[str] | None = None,
     instruction: str = '',
     model: str | None = None,
 ) -> str:
     """
-    Analyzes the content of a file and returns the new file name
-    that the client will apply.
+    Analyzes the content of an uploaded file (as bytes) and returns the new
+    file name that the client will apply.
 
     When the document does not provide enough information to decide,
     returns the sentinel DEFAULT_NAME ('unassigned') instead of a guess.
@@ -70,37 +81,28 @@ def rename_file(
     Supported formats: .txt, .pdf, .docx and common image formats.
 
     Args:
-        file_path: The path to the document to rename.
+        data: The raw bytes of the file to analyze.
+        extension: The file extension (with or without leading dot).
         existing_files: Names already present in the target folder; only
             those with the same extension as the analyzed file are
             considered to avoid duplicates.
         instruction: Additional user requirement for the new name.
         model: Override the Ollama model for this call.
     """
-    path = Path(file_path)
-    if not path.exists() or not path.is_file():
-        return f"Error: The file '{file_path}' does not exist."
-
-    ext = path.suffix.lower()
+    ext = _normalized_extension(extension)
     is_image = ext in IMAGE_EXTENSIONS
 
-    if not is_image and ext not in TOOL_BY_EXTENSION:
+    if not is_image and ext not in _EXTRACT_BY_EXT:
         return f"Error: Unsupported file extension '{ext}'."
 
-    try:
-        if is_image:
-            image_data = read_image_bytes(str(path))
-            content = None
-        else:
-            reader = available_tools[TOOL_BY_EXTENSION[ext]]
-            content = reader(file_path)
-            if content.startswith('Error'):
-                return content
-            image_data = None
-    except FileNotFoundError as e:
-        return f"Error: {e}"
-    except Exception as e:
-        return f"Error reading the file: {e}"
+    if is_image:
+        image_data = data
+        content = None
+    else:
+        content = _EXTRACT_BY_EXT[ext](data)
+        if content.startswith('Error'):
+            return content
+        image_data = None
 
     if not is_image and not _has_min_content(content):
         return DEFAULT_NAME

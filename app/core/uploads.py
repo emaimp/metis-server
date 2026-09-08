@@ -34,11 +34,11 @@ def save_temp_bytes(data: bytes, extension: str) -> str:
         return f.name
 
 
-def build_document_hint(temp_path: str, tool_name: str) -> str:
-    """Hint telling the model it must read the attached document with the given tool."""
+def build_attachment_hint(attachment_id: str, tool_name: str, filename: str) -> str:
+    """Hint telling the model it must read an attached document (by id) with the given tool."""
     return (
-        f"The user attached a file at '{temp_path}'. "
-        f"Use the tool '{tool_name}' to read it and answer the "
-        "user's question. You cannot execute actions on the file "
+        f"The user attached a document (id: '{attachment_id}', filename: '{filename}'). "
+        f"Use the tool '{tool_name}' with attachment_id='{attachment_id}' to read it and "
+        "answer the user's question. You cannot execute actions on the file "
         "(rename, move, delete, edit, etc.)."
     )

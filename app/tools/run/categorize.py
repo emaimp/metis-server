@@ -11,7 +11,7 @@ from app.core.settings import (
     TOOL_BY_EXTENSION,
 )
 from app.tools import available_tools
-from app.tools.reads.image import read_image_bytes
+from app.reads.image import read_image_bytes
 
 
 def _has_min_content(content: str | None) -> bool:

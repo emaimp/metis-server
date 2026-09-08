@@ -42,7 +42,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS attachments (
                 id TEXT PRIMARY KEY,
                 chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-                message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
                 filename TEXT NOT NULL,
                 content_type TEXT NOT NULL,
                 size INTEGER NOT NULL,

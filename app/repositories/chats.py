@@ -121,6 +121,45 @@ def get_attachment_db(chat_id: str, attachment_id: str) -> dict | None:
         return dict(row) if row else None
 
 
+def create_attachment_db(chat_id: str, filename: str, content_type: str, data: bytes) -> dict:
+    """Persist an uploaded file immediately (before its message exists); return its metadata."""
+    with db_conn() as conn:
+        cur = conn.execute("SELECT id FROM chats WHERE id = ?", (chat_id,))
+        if not cur.fetchone():
+            raise ValueError("chat not found")
+        attachment_id = _new_id()
+        now = now_iso()
+        conn.execute(
+            "INSERT INTO attachments (id, chat_id, filename, content_type, size, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (attachment_id, chat_id, filename, content_type, len(data), data, now),
+        )
+    return {"id": attachment_id, "chat_id": chat_id, "message_id": None, "filename": filename, "content_type": content_type, "size": len(data), "created_at": now}
+
+
+def link_attachments_to_message_db(attachment_ids: list[str], message_id: str) -> None:
+    """Link previously persisted attachments to the user message that owns them."""
+    if not attachment_ids:
+        return
+    with db_conn() as conn:
+        placeholders = ",".join("?" * len(attachment_ids))
+        conn.execute(
+            f"UPDATE attachments SET message_id = ? WHERE id IN ({placeholders})",
+            (message_id, *attachment_ids),
+        )
+
+
+def delete_attachments_db(attachment_ids: list[str]) -> None:
+    """Delete attachments (compensation when the model call fails after persisting them)."""
+    if not attachment_ids:
+        return
+    with db_conn() as conn:
+        placeholders = ",".join("?" * len(attachment_ids))
+        conn.execute(
+            f"DELETE FROM attachments WHERE id IN ({placeholders})",
+            attachment_ids,
+        )
+
+
 def get_message_db(chat_id: str, message_id: str) -> dict | None:
     """Return a message of a chat, or None if it does not exist."""
     with db_conn() as conn:
@@ -177,9 +216,8 @@ def add_messages_db(
     response_time_ms: int,
     user_created_at: str,
     assistant_created_at: str,
-    attachments: list[dict] | None = None,
 ) -> tuple[dict, dict]:
-    """Insert a user+assistant message pair (and its attachments), and bump the chat title/updated_at."""
+    """Insert a user+assistant message pair and bump the chat title/updated_at."""
     user_id = _new_id()
     assistant_id = _new_id()
     with db_conn() as conn:
@@ -204,20 +242,6 @@ def add_messages_db(
             "INSERT INTO messages (id, chat_id, role, content, model, created_at, response_time_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (user_id, chat_id, "user", user_content, None, user_created_at, None),
         )
-        # Insert attachments for the user message (same transaction)
-        attachment_meta: list[dict] = []
-        for att in attachments or []:
-            att_id = _new_id()
-            conn.execute(
-                "INSERT INTO attachments (id, chat_id, message_id, filename, content_type, size, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (att_id, chat_id, user_id, att["filename"], att["content_type"], len(att["data"]), att["data"], user_created_at),
-            )
-            attachment_meta.append({
-                "id": att_id,
-                "filename": att["filename"],
-                "content_type": att["content_type"],
-                "size": len(att["data"]),
-            })
         # Insert assistant message
         conn.execute(
             "INSERT INTO messages (id, chat_id, role, content, model, created_at, response_time_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -229,6 +253,6 @@ def add_messages_db(
         else:
             conn.execute("UPDATE chats SET updated_at = ? WHERE id = ?", (assistant_created_at, chat_id))
 
-    user_msg = {"id": user_id, "chat_id": chat_id, "role": "user", "content": user_content, "model": None, "created_at": user_created_at, "response_time_ms": None, "attachments": attachment_meta}
+    user_msg = {"id": user_id, "chat_id": chat_id, "role": "user", "content": user_content, "model": None, "created_at": user_created_at, "response_time_ms": None, "attachments": []}
     assistant_msg = {"id": assistant_id, "chat_id": chat_id, "role": "assistant", "content": assistant_content, "model": model, "created_at": assistant_created_at, "response_time_ms": response_time_ms, "attachments": []}
     return user_msg, assistant_msg

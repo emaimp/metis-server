@@ -1,6 +1,6 @@
-from app.tools.reads.docx import read_docx
-from app.tools.reads.pdf import read_pdf
-from app.tools.reads.txt import read_txt
+from app.reads.docx import read_docx
+from app.reads.pdf import read_pdf
+from app.reads.txt import read_txt
 
 available_tools = {
     'read_txt': read_txt,

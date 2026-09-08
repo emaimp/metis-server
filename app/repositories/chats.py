@@ -69,6 +69,16 @@ def get_chat_db(chat_id: str) -> dict | None:
                 attachments_by_message.setdefault(att.pop("message_id"), []).append(att)
             for m in msgs:
                 m["attachments"] = attachments_by_message.get(m["id"], [])
+        cur = conn.execute(
+            "SELECT id, message_id, mime_type, sample_rate, size, created_at FROM audios WHERE chat_id = ?",
+            (chat_id,),
+        )
+        audio_by_message: dict[str, dict] = {}
+        for audio_row in cur.fetchall():
+            audio = dict(audio_row)
+            audio_by_message[audio.pop("message_id")] = audio
+        for m in msgs:
+            m["audio"] = audio_by_message.get(m["id"])
         chat["messages"] = msgs
         return chat
 
@@ -106,6 +116,54 @@ def get_attachment_db(chat_id: str, attachment_id: str) -> dict | None:
         cur = conn.execute(
             "SELECT id, chat_id, message_id, filename, content_type, size, data, created_at FROM attachments WHERE id = ? AND chat_id = ?",
             (attachment_id, chat_id),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def get_message_db(chat_id: str, message_id: str) -> dict | None:
+    """Return a message of a chat, or None if it does not exist."""
+    with db_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, chat_id, role, content, model, created_at, response_time_ms FROM messages WHERE id = ? AND chat_id = ?",
+            (message_id, chat_id),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def add_audio_db(chat_id: str, message_id: str, data: bytes, sample_rate: int, mime_type: str = "audio/wav") -> dict:
+    """Store (or replace) the generated audio for an assistant message; return its metadata."""
+    with db_conn() as conn:
+        cur = conn.execute("SELECT id FROM messages WHERE id = ? AND chat_id = ?", (message_id, chat_id))
+        if not cur.fetchone():
+            raise ValueError("message not found")
+        audio_id = _new_id()
+        now = now_iso()
+        conn.execute(
+            "INSERT OR REPLACE INTO audios (id, chat_id, message_id, mime_type, sample_rate, size, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (audio_id, chat_id, message_id, mime_type, sample_rate, len(data), data, now),
+        )
+    return {"id": audio_id, "chat_id": chat_id, "message_id": message_id, "mime_type": mime_type, "sample_rate": sample_rate, "size": len(data), "created_at": now}
+
+
+def get_audio_db(chat_id: str, audio_id: str) -> dict | None:
+    """Return a stored audio (with its binary data) if it belongs to the given chat."""
+    with db_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, chat_id, message_id, mime_type, sample_rate, size, data, created_at FROM audios WHERE id = ? AND chat_id = ?",
+            (audio_id, chat_id),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def get_audio_by_message_db(chat_id: str, message_id: str) -> dict | None:
+    """Return the stored audio (with its binary data) for a message, or None."""
+    with db_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, chat_id, message_id, mime_type, sample_rate, size, data, created_at FROM audios WHERE message_id = ? AND chat_id = ?",
+            (message_id, chat_id),
         )
         row = cur.fetchone()
         return dict(row) if row else None

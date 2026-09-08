@@ -34,6 +34,15 @@ class AttachmentMeta(BaseModel):
     size: int
 
 
+class AudioMeta(BaseModel):
+    """Metadata of a TTS audio generated for an assistant message (raw bytes served separately)."""
+    id: str
+    mime_type: str
+    sample_rate: int
+    size: int
+    created_at: str
+
+
 class MessageModel(BaseModel):
     id: str
     chat_id: str
@@ -43,6 +52,7 @@ class MessageModel(BaseModel):
     created_at: str
     response_time_ms: int | None = None
     attachments: list[AttachmentMeta] = []
+    audio: AudioMeta | None = None
 
 
 class ChatDetailResponse(ChatBase):
@@ -58,3 +68,13 @@ class CreateMessageResponse(BaseModel):
     user_message: MessageModel
     assistant_message: MessageModel
     chat: ChatDetailResponse
+    audio_base64: str | None = None
+    mime_type: str | None = None
+    sample_rate: int | None = None
+
+
+class AudioResponse(BaseModel):
+    audio: AudioMeta
+    audio_base64: str
+    mime_type: str
+    sample_rate: int

@@ -51,6 +51,18 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
             CREATE INDEX IF NOT EXISTS idx_attachments_chat_id ON attachments(chat_id);
+            CREATE TABLE IF NOT EXISTS audios (
+                id TEXT PRIMARY KEY,
+                chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                mime_type TEXT NOT NULL DEFAULT 'audio/wav',
+                sample_rate INTEGER NOT NULL,
+                size INTEGER NOT NULL,
+                data BLOB NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audios_chat_id ON audios(chat_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audios_message_id ON audios(message_id);
             """
         )
         conn.commit()

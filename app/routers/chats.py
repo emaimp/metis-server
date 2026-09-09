@@ -25,6 +25,7 @@ from app.repositories.chats import (
     create_attachment_db,
     create_chat_db,
     delete_attachments_db,
+    delete_audio_by_message_db,
     delete_chat_db,
     get_attachment_db,
     get_audio_by_message_db,
@@ -413,3 +414,23 @@ async def create_message_audio(chat_id: str, message_id: str, voice: str | None 
         }
 
     return await _synthesize_and_store(chat_id, message_id, message["content"], voice)
+
+
+@router.delete("/{chat_id}/messages/{message_id}/audio")
+async def delete_message_audio(chat_id: str, message_id: str):
+    """Delete the stored TTS audio for an assistant message, so it can be regenerated.
+
+    After deletion, `GET /chats/{chat_id}` shows `audio: null` for the message
+    and `POST .../audio` synthesizes a fresh audio on demand.
+    """
+    if not await run_in_threadpool(chat_exists_db, chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    message = await run_in_threadpool(get_message_db, chat_id, message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if message["role"] != "assistant":
+        raise HTTPException(status_code=400, detail="Audio is only available for assistant messages")
+    deleted = await run_in_threadpool(delete_audio_by_message_db, chat_id, message_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Audio not found")
+    return {"detail": "Audio deleted"}

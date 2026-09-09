@@ -208,6 +208,16 @@ def get_audio_by_message_db(chat_id: str, message_id: str) -> dict | None:
         return dict(row) if row else None
 
 
+def delete_audio_by_message_db(chat_id: str, message_id: str) -> bool:
+    """Delete the stored audio for a message, returning True if it existed."""
+    with db_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM audios WHERE message_id = ? AND chat_id = ?",
+            (message_id, chat_id),
+        )
+        return cur.rowcount > 0
+
+
 def add_messages_db(
     chat_id: str,
     user_content: str,

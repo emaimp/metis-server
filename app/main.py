@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.core.database import init_db
-from app.routers.chat import router as chat_router
 from app.routers.chats import router as chats_router
 from app.routers.models import router as models_router
 from app.routers.voices import router as voices_router
@@ -25,7 +24,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(chat_router)
 app.include_router(chats_router)
 app.include_router(models_router)
 app.include_router(voices_router)

@@ -1,9 +1,7 @@
-import os
-
 from app.core.settings import MAX_CHARS
 
 
-# Tool definition for .txt documents
+# Text extraction for .txt documents from raw bytes (no disk I/O).
 def extract_txt_from_bytes(data: bytes) -> str:
     """Extract text from a .txt document stored as bytes (no disk I/O)."""
     try:
@@ -19,18 +17,3 @@ def extract_txt_from_bytes(data: bytes) -> str:
         )
     return content
 
-
-def read_txt(file_path: str) -> str:
-    """Reads and extracts the content of a text document (.txt) for general analysis.
-
-    Args:
-        file_path: The path to the text file to read.
-    """
-    if not os.path.exists(file_path):
-        return f"Error: The file '{file_path}' does not exist."
-
-    try:
-        with open(file_path, "rb") as f:
-            return extract_txt_from_bytes(f.read())
-    except Exception as e:
-        return f"Error reading the document: {str(e)}"

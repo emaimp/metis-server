@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -26,12 +25,6 @@ def content_type_for(extension: str) -> str:
     """Return the MIME type for an extension, or a generic binary type."""
     return MIME_BY_EXTENSION.get(extension, 'application/octet-stream')
 
-
-def save_temp_bytes(data: bytes, extension: str) -> str:
-    """Write raw bytes to a temporary file and return its path."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as f:
-        f.write(data)
-        return f.name
 
 
 def build_attachment_hint(attachment_id: str, tool_name: str, filename: str) -> str:

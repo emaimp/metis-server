@@ -15,7 +15,7 @@ from app.core.database import init_db
 from app.routers.chats import router
 
 
-def _fake_ask_chat(message, image=None, available_tools=None, tool_hint=None, model=None):
+def _fake_ask_chat(message, image=None, model=None):
     return "Respuesta simulada del modelo"
 
 
@@ -145,7 +145,7 @@ def test_create_message_resolve_model_error(client, monkeypatch):
 
 
 def test_create_message_ask_chat_error(client, monkeypatch):
-    def _boom(message, image=None, available_tools=None, tool_hint=None, model=None):
+    def _boom(message, image=None, model=None):
         raise ConnectionError('ollama down')
 
     monkeypatch.setattr('app.routers.chats.ask_chat', _boom)
@@ -155,7 +155,7 @@ def test_create_message_ask_chat_error(client, monkeypatch):
 
 
 def test_create_message_empty_response(client, monkeypatch):
-    def _empty(message, image=None, available_tools=None, tool_hint=None, model=None):
+    def _empty(message, image=None, model=None):
         return ''
 
     monkeypatch.setattr('app.routers.chats.ask_chat', _empty)
@@ -164,12 +164,11 @@ def test_create_message_empty_response(client, monkeypatch):
     assert resp.status_code == 502
 
 
-def test_create_message_with_document(client, monkeypatch):
+def test_create_message_with_document_embeds_text(client, monkeypatch):
     captured = {}
 
-    def _fake_ask_chat(message, image=None, available_tools=None, tool_hint=None, model=None):
-        captured['tool_hint'] = tool_hint
-        captured['tool_names'] = sorted((available_tools or {}).keys())
+    def _fake_ask_chat(message, image=None, model=None):
+        captured['message'] = message
         return 'Respuesta simulada del modelo'
 
     monkeypatch.setattr('app.routers.chats.ask_chat', _fake_ask_chat)
@@ -189,10 +188,10 @@ def test_create_message_with_document(client, monkeypatch):
     assert att['content_type'] == 'text/plain'
     assert att['size'] == len(content)
     assert data['chat']['messages'][0]['attachments'][0]['id'] == att['id']
-    # Read tools come from the database and the hint references the attachment id
-    assert captured['tool_names'] == ['read_docx', 'read_pdf', 'read_txt']
-    assert att['id'] in captured['tool_hint']
-    assert 'nota.txt' in captured['tool_hint']
+    # The document text is embedded server-side in the message sent to the model
+    assert 'contenido de prueba del documento' in captured['message']
+    assert 'Analiza esto' in captured['message']
+    assert 'nota.txt' in captured['message']
 
 
 def test_create_message_with_image(client):
@@ -394,7 +393,9 @@ def test_download_audio_not_found(client):
 def test_create_message_rename_tool(client, monkeypatch):
     captured = {}
 
-    def _fake_rename_file(file_path, existing_files=None, instruction='', model=None):
+    def _fake_rename_file(data, extension, existing_files=None, instruction='', model=None):
+        captured['data'] = data
+        captured['extension'] = extension
         captured['instruction'] = instruction
         captured['existing_files'] = existing_files
         return 'factura_2026'
@@ -424,7 +425,7 @@ def test_create_message_rename_tool(client, monkeypatch):
 
 
 def test_create_message_categorize_tool(client, monkeypatch):
-    def _fake_categorize(file_path, existing_categories=None, instruction='', model=None):
+    def _fake_categorize(data, extension, existing_categories=None, instruction='', model=None):
         assert instruction == 'es una factura'
         assert existing_categories == ['contratos', 'facturas']
         return 'facturas'

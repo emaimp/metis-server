@@ -33,18 +33,6 @@ DOCUMENT_EXTENSIONS = {'.txt', '.pdf', '.docx'}
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'}
 
-TOOL_BY_EXTENSION = {
-    '.txt': 'read_txt',
-    '.pdf': 'read_pdf',
-    '.docx': 'read_docx',
-    '.png': 'read_image',
-    '.jpg': 'read_image',
-    '.jpeg': 'read_image',
-    '.gif': 'read_image',
-    '.webp': 'read_image',
-    '.bmp': 'read_image',
-}
-
 # Maximum size allowed for uploaded documents/images (in bytes). 10 MB.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 

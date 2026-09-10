@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
@@ -11,10 +10,9 @@ from starlette.concurrency import run_in_threadpool
 
 from app.ai.ollama import ask_chat, resolve_model
 from app.core.markdown import strip_markdown
-from app.core.settings import DOCUMENT_EXTENSIONS, IMAGE_EXTENSIONS, TOOL_BY_EXTENSION
+from app.core.settings import DOCUMENT_EXTENSIONS, IMAGE_EXTENSIONS
 from app.core.time_utils import now_iso
 from app.core.uploads import (
-    build_attachment_hint,
     content_type_for,
     validate_upload,
 )
@@ -44,7 +42,7 @@ from app.schemas.chats import (
     CreateChatRequest,
     UpdateTitleRequest,
 )
-from app.reads.attachment_reads import make_attachment_tools
+from app.reads import extract_document_text
 from app.tools.run.categorize import categorize_file
 from app.tools.run.naming import rename_file
 
@@ -292,23 +290,22 @@ async def create_message(
         })
         return payload
 
-    # Normal flow: ask the model (image bytes and/or document read tools from the database)
+    # Normal flow: ask the model. A document's text is extracted server-side and
+    # embedded in the user message (same approach as the action tools); images
+    # travel through the native vision channel of ask_chat.
+    model_message = message
+    if document_data is not None:
+        document_text = extract_document_text(document_data, document_ext)
+        model_message = (
+            f"Attached document '{document.filename}':\n"
+            f"{document_text}\n\n"
+            f"User question: {message}"
+        )
     t0 = time.perf_counter()
     try:
-        if document_meta is not None:
-            doc_tools = make_attachment_tools(chat_id)
-            tool_name = TOOL_BY_EXTENSION[document_ext]
-            response = await run_in_threadpool(
-                ask_chat, message,
-                image=image_data,
-                available_tools=doc_tools,
-                tool_hint=build_attachment_hint(document_meta["id"], tool_name, document_meta["filename"]),
-                model=effective_model,
-            )
-        else:
-            response = await run_in_threadpool(
-                ask_chat, message, image=image_data, model=effective_model,
-            )
+        response = await run_in_threadpool(
+            ask_chat, model_message, image_data, effective_model,
+        )
     except Exception as e:
         logger.exception("ask_chat failed")
         await _discard_pending_attachments()

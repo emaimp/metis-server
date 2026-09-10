@@ -1,12 +1,8 @@
 import json
-from collections.abc import Callable
-from contextvars import ContextVar
 
 from ollama import chat, list as ollama_list
 
 from app.core.settings import LANGUAGE_CODE, MODEL
-
-_current_model: ContextVar[str] = ContextVar('_current_model', default='')
 
 
 def _language_instruction(code: str) -> str:
@@ -25,14 +21,13 @@ def resolve_model(selected: str | None = None) -> str:
 
     Precedence:
       1. Explicitly selected model (from the client/UI).
-      2. Active model in the current context (set by ask_chat during tool calls).
-      3. OLLAMA_MODEL env var.
-      4. Clear error if none of the above.
+      2. OLLAMA_MODEL env var.
+      3. Clear error if none of the above.
 
     Raises:
         RuntimeError: if no model can be resolved.
     """
-    model = selected or _current_model.get() or MODEL
+    model = selected or MODEL
     if not model:
         raise RuntimeError(
             'No model configured. Set OLLAMA_MODEL in the .env file '
@@ -91,33 +86,22 @@ def list_models() -> list[str]:
 def ask_chat(
     message: str,
     image: bytes | None = None,
-    available_tools: dict[str, Callable] | None = None,
-    tool_hint: str | None = None,
     model: str | None = None,
-    return_tool_results: bool = False,
-) -> str | tuple[str, dict[str, str]]:
+) -> str:
     """
-    Sends a message (with optional image and/or tools) to the model
-    and returns its response.
+    Sends a message (with an optional image) to the model and returns its response.
 
     Args:
-        message: The user's message.
+        message: The user's message. When a document is attached, its extracted
+            text is already embedded in the message by the caller.
         image: The bytes of an optional image to analyze.
-        available_tools: Mapping of name -> function for the available tools.
-        tool_hint: Additional hint (e.g. the path of an attached document)
-            so the model knows it must use a tool.
         model: The Ollama model to use (resolved by caller or auto-resolved).
-        return_tool_results: If True, also returns the last result of each
-            tool call so far in a dict {tool_name: result}.
     """
     effective = resolve_model(model)
-    token = _current_model.set(effective)
 
     messages = [
         {'role': 'system', 'content': _language_instruction(LANGUAGE_CODE)}
     ]
-    if tool_hint:
-        messages.append({'role': 'system', 'content': tool_hint})
 
     user_message = {
         'role': 'user',
@@ -127,47 +111,11 @@ def ask_chat(
         user_message['images'] = [image]
     messages.append(user_message)
 
-    tools = list(available_tools.values()) if available_tools else None
-
-    tool_results: dict[str, str] = {}
-
     response = chat(
         model=effective,
         messages=messages,
-        tools=tools,
         think=False,
         stream=False,
     )
-
-    try:
-        for _ in range(5):  # max tool-call iterations
-            if not response.message.tool_calls:
-                break
-
-            messages.append(response.message)
-            for tool_call in response.message.tool_calls:
-                function_name = tool_call.function.name
-                function_args = tool_call.function.arguments
-                if available_tools and function_name in available_tools:
-                    result = available_tools[function_name](**function_args)
-                    tool_results[function_name] = result
-                    messages.append({
-                        'role': 'tool',
-                        'content': result,
-                        'name': function_name,
-                    })
-
-            response = chat(
-                model=effective,
-                messages=messages,
-                tools=tools,
-                think=False,
-                stream=False,
-            )
-    finally:
-        _current_model.reset(token)
-
-    if return_tool_results:
-        return response.message.content, tool_results
 
     return response.message.content

@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 import re
 import time
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from app.ai.ollama import ask_chat, resolve_model
+from app.ai.tts.encoding import ndarray_to_wav_bytes, wav_bytes_to_base64
 from app.core.markdown import strip_markdown
 from app.core.settings import DOCUMENT_EXTENSIONS, IMAGE_EXTENSIONS
 from app.core.time_utils import now_iso
@@ -34,6 +36,7 @@ from app.repositories.chats import (
     list_chats_db,
     update_title_db,
 )
+from app.repositories.voice_profiles import get_voice_profile_db
 from app.schemas.chats import (
     AudioResponse,
     ChatDetailResponse,
@@ -112,26 +115,61 @@ async def delete_chat(chat_id: str):
     return {"detail": "Chat deleted"}
 
 
-async def _synthesize_and_store(chat_id: str, message_id: str, content: str, voice: str | None) -> dict:
-    """Run the TTS pipeline for a message, persist the WAV as BLOB, and return meta + base64."""
-    try:
-        def _tts_sync():
-            # Lazy imports: omnivoice pulls in torch (heavy), only needed for TTS.
-            from app.ai.omnivoice import SAMPLE_RATE, synthesize
-            from app.ai.tts.encoding import ndarray_to_wav_bytes
+async def _synthesize_and_store(
+    chat_id: str,
+    message_id: str,
+    content: str,
+    voice: str | None,
+    voice_profile_id: str | None = None,
+) -> dict:
+    """Run the TTS pipeline for a message, persist the WAV as BLOB, and return meta + base64.
 
+    `voice` (Voice Design instruct) and `voice_profile_id` (cloned reference voice)
+    are mutually exclusive alternatives.
+    """
+    if voice and voice_profile_id:
+        raise HTTPException(
+            status_code=400, detail="Use either 'voice' or 'voice_profile_id', not both",
+        )
+    try:
+        profile: dict | None = None
+        if voice_profile_id:
+            profile = await run_in_threadpool(get_voice_profile_db, voice_profile_id)
+            if not profile:
+                raise HTTPException(status_code=404, detail="Voice profile not found")
+
+        def _tts_sync():
+            # app.ai.omnivoice stays imported lazily on purpose: it pulls in torch
+            # (heavy) and is only needed for TTS, and resolving it at call time lets
+            # the tests fake it via monkeypatch on the `app.ai.omnivoice` module.
             tts_text = strip_markdown(content)
             if not tts_text or not tts_text.strip():
                 raise NoSpeakableTextError()
 
-            audio, sample_rate = synthesize(tts_text, instruct=voice)
+            if profile is not None:
+                from app.ai.omnivoice import synthesize_with_ref_bytes
+
+                # Reference audio is stored as-is (.wav/.mp3); the temp-file suffix
+                # tells the model loader how to read it. Derive it from the
+                # validated filename, falling back to the stored content type.
+                suffix = Path(profile["filename"] or "").suffix.lower()
+                if suffix not in (".wav", ".mp3"):
+                    suffix = ".mp3" if profile.get("content_type") == "audio/mpeg" else ".wav"
+                audio, sample_rate = synthesize_with_ref_bytes(
+                    tts_text,
+                    profile["data"],
+                    ref_audio_suffix=suffix,
+                    ref_text=profile.get("ref_text"),
+                )
+            else:
+                from app.ai.omnivoice import SAMPLE_RATE, synthesize
+
+                audio, sample_rate = synthesize(tts_text, instruct=voice)
             return ndarray_to_wav_bytes(audio, sample_rate), sample_rate
 
         wav_bytes, wav_sample_rate = await run_in_threadpool(_tts_sync)
         audio_meta = await run_in_threadpool(add_audio_db, chat_id, message_id, wav_bytes, wav_sample_rate)
         audio_meta = {k: audio_meta[k] for k in ("id", "mime_type", "sample_rate", "size", "created_at")}
-        from app.ai.tts.encoding import wav_bytes_to_base64
-
         audio_base64 = wav_bytes_to_base64(wav_bytes)
         return {
             "audio": audio_meta,
@@ -144,6 +182,8 @@ async def _synthesize_and_store(chat_id: str, message_id: str, content: str, voi
             status_code=502,
             detail="Model response contains no speakable text after markdown stripping",
         )
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
@@ -164,6 +204,7 @@ async def create_message(
     existing_categories: str = Form(""),
     tts: bool = Form(False),
     voice: str | None = Form(None),
+    voice_profile_id: str | None = Form(None),
 ):
     """Send a single-turn message (optionally with an image, document, tool mentions and/or TTS) and persist the exchange.
 
@@ -343,7 +384,9 @@ async def create_message(
     user_msg["audio"] = None
     assistant_msg["audio"] = None
     if tts:
-        audio = await _synthesize_and_store(chat_id, assistant_msg["id"], assistant_msg["content"], voice)
+        audio = await _synthesize_and_store(
+            chat_id, assistant_msg["id"], assistant_msg["content"], voice, voice_profile_id,
+        )
         assistant_msg["audio"] = audio["audio"]
 
     return {
@@ -383,11 +426,18 @@ async def get_audio(chat_id: str, audio_id: str):
 
 
 @router.post("/{chat_id}/messages/{message_id}/audio", response_model=AudioResponse)
-async def create_message_audio(chat_id: str, message_id: str, voice: str | None = Query(None)):
+async def create_message_audio(
+    chat_id: str,
+    message_id: str,
+    voice: str | None = Query(None),
+    voice_profile_id: str | None = Query(None),
+):
     """Generate (or reuse) the TTS audio for an assistant message, on demand.
 
     If the message already has a stored audio it is returned as-is (idempotent).
-    The `voice` query param only applies when the audio does not exist yet.
+    The `voice` / `voice_profile_id` params are mutually exclusive alternatives
+    (Voice Design vs cloned reference voice) and only apply when the audio
+    does not exist yet.
     """
     if not await run_in_threadpool(chat_exists_db, chat_id):
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -400,8 +450,6 @@ async def create_message_audio(chat_id: str, message_id: str, voice: str | None 
     # Idempotent: reuse the stored audio if present (no regeneration)
     existing = await run_in_threadpool(get_audio_by_message_db, chat_id, message_id)
     if existing:
-        from app.ai.tts.encoding import wav_bytes_to_base64
-
         meta = {key: existing[key] for key in ("id", "mime_type", "sample_rate", "size", "created_at")}
         return {
             "audio": meta,
@@ -410,7 +458,9 @@ async def create_message_audio(chat_id: str, message_id: str, voice: str | None 
             "sample_rate": existing["sample_rate"],
         }
 
-    return await _synthesize_and_store(chat_id, message_id, message["content"], voice)
+    return await _synthesize_and_store(
+        chat_id, message_id, message["content"], voice, voice_profile_id,
+    )
 
 
 @router.delete("/{chat_id}/messages/{message_id}/audio")

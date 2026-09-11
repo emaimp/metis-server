@@ -46,4 +46,10 @@ MIME_BY_EXTENSION = {
     '.gif': 'image/gif',
     '.webp': 'image/webp',
     '.bmp': 'image/bmp',
+    '.wav': 'audio/wav',
+    '.mp3': 'audio/mpeg',
 }
+
+# Reference-voice uploads for voice cloning (OmniVoice `ref_audio`).
+# Stored and forwarded as-is: the model loads both formats natively.
+VOICE_REFERENCE_EXTENSIONS = {'.wav', '.mp3'}

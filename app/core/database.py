@@ -63,6 +63,23 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_audios_chat_id ON audios(chat_id);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_audios_message_id ON audios(message_id);
+            CREATE TABLE IF NOT EXISTS voice_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                duration_seconds REAL,
+                data BLOB NOT NULL,
+                ref_text TEXT,
+                image_filename TEXT,
+                image_content_type TEXT,
+                image_size INTEGER,
+                image_data BLOB,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_voice_profiles_name ON voice_profiles(name COLLATE NOCASE);
             """
         )
         conn.commit()

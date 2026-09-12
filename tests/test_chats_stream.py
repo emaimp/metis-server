@@ -69,7 +69,7 @@ def test_message_stream_deltas_and_done(client):
         data={'message': 'Hola', 'model': 'm'},
     )
     assert resp.status_code == 200
-    assert resp.headers['content-type'].startswith('text/event-stream')
+    assert resp.headers['content-type'] == 'text/event-stream; charset=utf-8'
     events = _parse_sse(resp.text)
     assert [e for e, _ in events] == ['delta', 'delta', 'done']
     assert events[0][1] == {'text': 'Hola '}

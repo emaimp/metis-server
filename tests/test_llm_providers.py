@@ -99,6 +99,49 @@ def test_llamacpp_provider_chat_minimal(monkeypatch):
     assert 'response_format' not in body
 
 
+class _FakeSSEResponse:
+    """Mimics requests' streaming iter_lines encoding behavior exactly.
+
+    With ``decode_unicode=True`` it decodes the lines with ISO-8859-1 (the
+    fallback requests applies to any text/* without charset — the mojibake
+    bug); with ``decode_unicode=False`` it yields the raw UTF-8 bytes.
+    """
+
+    def __init__(self, lines):
+        self._lines = lines
+        self.closed = False
+
+    def raise_for_status(self):
+        pass
+
+    def iter_lines(self, **kwargs):
+        decode = kwargs.get('decode_unicode')
+        for line in self._lines:
+            yield line.decode('iso-8859-1') if decode else line
+
+    def close(self):
+        self.closed = True
+
+
+def test_llamacpp_chat_stream_decodes_utf8(monkeypatch):
+    from app.ai.providers import llamacpp as provider
+
+    monkeypatch.setattr('app.core.settings.LLAMA_CPP_BASE_URL', 'http://srv:8080/v1')
+    fake = _FakeSSEResponse([
+        'data: {"choices":[{"delta":{"content":"t"}}]}\n'.encode('utf-8'),
+        'data: {"choices":[{"delta":{"content":"ú final"}}]}\n'.encode('utf-8'),
+        'data: {"choices":[{"delta":{"reasoning_content":"pensando"}}]}\n'.encode('utf-8'),
+        b'data: [DONE]',
+    ])
+    monkeypatch.setattr(requests, 'post', lambda *a, **k: fake)
+
+    out = list(provider.chat_stream(model='m', messages=[{'role': 'user', 'content': 'q'}]))
+
+    # Accents must arrive intact (would be "Ãº final" with the ISO-8859-1 bug)
+    assert out == ['t', 'ú final']
+    assert fake.closed
+
+
 def test_llamacpp_provider_connection_error(monkeypatch):
     from app.ai.providers import llamacpp as provider
 

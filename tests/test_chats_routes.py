@@ -15,7 +15,7 @@ from app.core.database import init_db
 from app.routers.chats import router
 
 
-def _fake_ask_chat(message, image=None, model=None):
+def _fake_ask_chat(message, model=None, image=None):
     return "Respuesta simulada del modelo"
 
 
@@ -145,8 +145,8 @@ def test_create_message_resolve_model_error(client, monkeypatch):
 
 
 def test_create_message_ask_chat_error(client, monkeypatch):
-    def _boom(message, image=None, model=None):
-        raise ConnectionError('ollama down')
+    def _boom(message, model=None, image=None):
+        raise ConnectionError('llm down')
 
     monkeypatch.setattr('app.routers.chats.ask_chat', _boom)
     chat = _create_chat(client)
@@ -155,7 +155,7 @@ def test_create_message_ask_chat_error(client, monkeypatch):
 
 
 def test_create_message_empty_response(client, monkeypatch):
-    def _empty(message, image=None, model=None):
+    def _empty(message, model=None, image=None):
         return ''
 
     monkeypatch.setattr('app.routers.chats.ask_chat', _empty)
@@ -167,7 +167,7 @@ def test_create_message_empty_response(client, monkeypatch):
 def test_create_message_with_document_embeds_text(client, monkeypatch):
     captured = {}
 
-    def _fake_ask_chat(message, image=None, model=None):
+    def _fake_ask_chat(message, model=None, image=None):
         captured['message'] = message
         return 'Respuesta simulada del modelo'
 
@@ -393,7 +393,7 @@ def test_download_audio_not_found(client):
 def test_create_message_rename_tool(client, monkeypatch):
     captured = {}
 
-    def _fake_rename_file(data, extension, existing_files=None, instruction='', model=None):
+    def _fake_rename_file(data, extension, model=None, existing_files=None, instruction=''):
         captured['data'] = data
         captured['extension'] = extension
         captured['instruction'] = instruction
@@ -425,7 +425,7 @@ def test_create_message_rename_tool(client, monkeypatch):
 
 
 def test_create_message_categorize_tool(client, monkeypatch):
-    def _fake_categorize(data, extension, existing_categories=None, instruction='', model=None):
+    def _fake_categorize(data, extension, model=None, existing_categories=None, instruction=''):
         assert instruction == 'es una factura'
         assert existing_categories == ['contratos', 'facturas']
         return 'facturas'

@@ -291,7 +291,7 @@ def test_patch_put_delete_image_and_profile(client):
 def _patch_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         'app.routers.chats.ask_chat',
-        lambda message, image=None, model=None: 'Respuesta simulada del modelo',
+        lambda message, model=None, image=None: 'Respuesta simulada del modelo',
     )
     monkeypatch.setattr('app.routers.chats.resolve_model', lambda selected=None: 'modelo-de-prueba')
 

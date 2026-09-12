@@ -1,6 +1,6 @@
 import re
 
-from app.ai.ollama import _generate_json_field, _language_instruction, resolve_model
+from app.ai.llm import generate_json_field, _language_instruction, resolve_model
 from app.core.settings import (
     DEFAULT_CATEGORY,
     IMAGE_EXTENSIONS,
@@ -50,9 +50,9 @@ def _normalized_extension(extension: str) -> str:
 def categorize_file(
     data: bytes,
     extension: str,
+    model: str | None = None,
     existing_categories: list[str] | None = None,
     instruction: str = '',
-    model: str | None = None,
 ) -> str:
     """
     Analyzes an uploaded file (as bytes) and returns its category. The frontend
@@ -65,10 +65,10 @@ def categorize_file(
     Args:
         data: The raw bytes of the file to analyze.
         extension: The file extension (with or without leading dot).
+        model: Model chosen by the client for this call (via resolve_model).
         existing_categories: Category names the frontend already has,
             so the model can reuse them for consistency.
         instruction: Additional user requirement steering the category.
-        model: Override the Ollama model for this call.
 
     Returns:
         The category (folder name) on success. When the document does not
@@ -124,7 +124,7 @@ def categorize_file(
 
         user = f'Content:\n{content}\n' if content else ''
 
-        data = _generate_json_field(
+        data = generate_json_field(
             'category', system, user, resolve_model(model),
             images=[image_data] if image_data else None,
         )

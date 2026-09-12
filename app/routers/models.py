@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
-from app.ai.ollama import list_models
+from app.ai.llm import list_models
 
 router = APIRouter(tags=['models'])
 
@@ -8,7 +8,7 @@ router = APIRouter(tags=['models'])
 @router.get('/models')
 async def get_models():
     """
-    Return the list of installed Ollama model names.
+    Return the list of model names served by the llama.cpp server.
     Useful for populating a model selector in the client UI.
     """
     try:

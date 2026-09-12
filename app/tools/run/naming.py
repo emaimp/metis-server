@@ -1,6 +1,6 @@
 import re
 
-from app.ai.ollama import _generate_json_field, _language_instruction, resolve_model
+from app.ai.llm import generate_json_field, _language_instruction, resolve_model
 from app.core.settings import (
     DEFAULT_NAME,
     IMAGE_EXTENSIONS,
@@ -67,9 +67,9 @@ def _normalized_extension(extension: str) -> str:
 def rename_file(
     data: bytes,
     extension: str,
+    model: str | None = None,
     existing_files: list[str] | None = None,
     instruction: str = '',
-    model: str | None = None,
 ) -> str:
     """
     Analyzes the content of an uploaded file (as bytes) and returns the new
@@ -83,11 +83,11 @@ def rename_file(
     Args:
         data: The raw bytes of the file to analyze.
         extension: The file extension (with or without leading dot).
+        model: Model chosen by the client for this call (via resolve_model).
         existing_files: Names already present in the target folder; only
             those with the same extension as the analyzed file are
             considered to avoid duplicates.
         instruction: Additional user requirement for the new name.
-        model: Override the Ollama model for this call.
     """
     ext = _normalized_extension(extension)
     is_image = ext in IMAGE_EXTENSIONS
@@ -132,7 +132,7 @@ def rename_file(
             )
 
         user = content if content else ''
-        data = _generate_json_field(
+        data = generate_json_field(
             'new_name', system, user, resolve_model(model),
             images=[image_data] if image_data else None,
         )

@@ -9,7 +9,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
 from starlette.concurrency import run_in_threadpool
 
-from app.ai.ollama import ask_chat, resolve_model
+from app.ai.llm import ask_chat, resolve_model
 from app.ai.tts.encoding import ndarray_to_wav_bytes, wav_bytes_to_base64
 from app.core.markdown import strip_markdown
 from app.core.settings import DOCUMENT_EXTENSIONS, IMAGE_EXTENSIONS
@@ -284,7 +284,7 @@ async def create_message(
                     else None
                 )
                 result = await run_in_threadpool(
-                    rename_file, target_data, target_ext, files, instruction, effective_model,
+                    rename_file, target_data, target_ext, effective_model, files, instruction,
                 )
                 result = _require_tool_result(result, "The tool did not generate a file name")
             else:
@@ -295,7 +295,7 @@ async def create_message(
                     else None
                 )
                 result = await run_in_threadpool(
-                    categorize_file, target_data, target_ext, categories, instruction, effective_model,
+                    categorize_file, target_data, target_ext, effective_model, categories, instruction,
                 )
                 result = _require_tool_result(result, "The tool did not categorize the file")
         except HTTPException:
@@ -333,7 +333,7 @@ async def create_message(
 
     # Normal flow: ask the model. A document's text is extracted server-side and
     # embedded in the user message (same approach as the action tools); images
-    # travel through the native vision channel of ask_chat.
+    # travel through the vision channel of the active provider (ask_chat).
     model_message = message
     if document_data is not None:
         document_text = extract_document_text(document_data, document_ext)
@@ -345,7 +345,7 @@ async def create_message(
     t0 = time.perf_counter()
     try:
         response = await run_in_threadpool(
-            ask_chat, model_message, image_data, effective_model,
+            ask_chat, model_message, effective_model, image_data,
         )
     except Exception as e:
         logger.exception("ask_chat failed")

@@ -3,7 +3,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL = os.getenv('OLLAMA_MODEL', '')
+# LLM backend: llama.cpp OpenAI-compatible server.
+LLAMA_CPP_BASE_URL = os.getenv('LLAMACPP_BASE_URL', '').strip()
+
+# Timeout (seconds) for HTTP requests to the llama.cpp server.
+LLAMA_CPP_TIMEOUT = 180
+
+# PIL image format names -> MIME, used to build data URIs for vision requests.
+IMAGE_FORMAT_TO_MIME = {
+    'PNG': 'image/png',
+    'JPEG': 'image/jpeg',
+    'GIF': 'image/gif',
+    'WEBP': 'image/webp',
+    'BMP': 'image/bmp',
+}
+
+# MIME used when the image format cannot be sniffed.
+IMAGE_FORMAT_FALLBACK_MIME = 'image/png'
 
 LANGUAGE = os.getenv('APP_LANGUAGE', '').strip().lower()
 

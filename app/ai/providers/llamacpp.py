@@ -1,4 +1,5 @@
 import base64
+import codecs
 import io
 import json
 from collections.abc import Iterator
@@ -94,9 +95,11 @@ def chat_stream(
 ) -> Iterator[str]:
     """Yield incremental text deltas from a llama.cpp streaming chat (SSE).
 
-    Only ``choices[0].delta.content`` is emitted: ``reasoning_content`` deltas
-    are ignored (thinking behavior is managed server-side) and malformed chunks
-    are skipped. The stream ends at the ``data: [DONE]`` sentinel.
+    Raw bytes are consumed and decoded as UTF-8 with an incremental decoder:
+    requests falls back to ISO-8859-1 for any ``text/*`` without charset,
+    which corrupts accents ("ú" -> "Ãº"). Only ``choices[0].delta.content``
+    is emitted (``reasoning_content`` deltas are ignored; thinking is managed
+    server-side) and the stream ends at the ``data: [DONE]`` sentinel.
     """
     base_url = settings.LLAMA_CPP_BASE_URL
     if not base_url:
@@ -116,7 +119,15 @@ def chat_stream(
             stream=True,
         )
         resp.raise_for_status()
-        for line in resp.iter_lines(decode_unicode=True):
+        # Consume raw BYTES and decode as UTF-8 ourselves. requests assigns
+        # ISO-8859-1 to any text/* response without charset (llama.cpp's SSE
+        # does not send one), so decode_unicode=True corrupts accents
+        # ("ú" -> "Ãº"). 0x0A never appears inside a multi-byte UTF-8
+        # sequence, so each SSE line is a complete UTF-8 boundary; the
+        # incremental decoder plus the final flush cover any residual tail.
+        decoder = codecs.getincrementaldecoder('utf-8')()
+        for raw_line in resp.iter_lines(decode_unicode=False):
+            line = decoder.decode(raw_line) if raw_line else ''
             if not line or not line.startswith('data:'):
                 continue
             data = line[5:].strip()
@@ -128,6 +139,7 @@ def chat_stream(
                 continue
             if delta.get('content'):
                 yield delta['content']
+        decoder.decode(b'', final=True)
     except requests.RequestException as e:
         raise ConnectionError(f'Cannot connect to llama.cpp: {e}') from e
     finally:

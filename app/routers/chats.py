@@ -545,7 +545,11 @@ async def create_message_stream(
             if not persisted:
                 await run_in_threadpool(delete_attachments_db, pending_attachment_ids)
 
-    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream; charset=utf-8",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/{chat_id}/attachments/{attachment_id}")

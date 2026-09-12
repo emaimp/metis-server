@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -7,9 +8,10 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from app.ai.llm import ask_chat, resolve_model
+from app.ai.llm import ask_chat, ask_chat_stream, resolve_model
 from app.ai.tts.encoding import ndarray_to_wav_bytes, wav_bytes_to_base64
 from app.core.markdown import strip_markdown
 from app.core.settings import DOCUMENT_EXTENSIONS, IMAGE_EXTENSIONS
@@ -69,6 +71,11 @@ def _require_tool_result(result: str, missing_detail: str) -> str:
     if result.startswith("Error"):
         raise HTTPException(status_code=502, detail=result)
     return result
+
+
+def _sse_event(event: str, payload: dict) -> str:
+    """Format one SSE event; the JSON payload travels on a single data line."""
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
 
 @router.post("", response_model=ChatSummary)
@@ -397,6 +404,148 @@ async def create_message(
         "mime_type": audio["mime_type"] if audio else None,
         "sample_rate": audio["sample_rate"] if audio else None,
     }
+
+
+@router.post("/{chat_id}/messages/stream")
+async def create_message_stream(
+    chat_id: str,
+    message: str = Form(...),
+    model: str | None = Form(None),
+    image: UploadFile | None = File(None),
+    document: UploadFile | None = File(None),
+    tts: bool = Form(False),
+    voice: str | None = Form(None),
+    voice_profile_id: str | None = Form(None),
+):
+    """Stream a chat exchange as SSE events: `delta` (text), `done` (final payload), `error`.
+
+    Same contract as `POST /{chat_id}/messages` for the normal chat flow, but the
+    model text is streamed chunk-by-chunk. Tool mentions are not supported here
+    (their JSON output is not streamable): use the blocking endpoint for tools.
+    With `tts=true`, the audio is synthesized once the text is complete and rides
+    inside the final `done` event; text-audio sync (pacing) is a client concern.
+    """
+    message = message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message must be non-empty")
+    if not await run_in_threadpool(chat_exists_db, chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    try:
+        effective_model = resolve_model(model)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if UNKNOWN_TOOL_PATTERN.search(message):
+        raise HTTPException(
+            status_code=400,
+            detail="Tool mentions are not supported by the streaming endpoint; use POST /chats/{chat_id}/messages",
+        )
+
+    # Same upload validation/persistence as the blocking endpoint: attachments are
+    # stored BEFORE the model call so a failure can compensate them afterwards.
+    image_data: bytes | None = None
+    document_data: bytes | None = None
+    image_meta: dict | None = None
+    document_meta: dict | None = None
+    image_ext: str | None = None
+    document_ext: str | None = None
+    if image is not None:
+        image_data = await image.read()
+        image_ext = validate_upload(image.filename, image_data, IMAGE_EXTENSIONS)
+        image_meta = await run_in_threadpool(
+            create_attachment_db, chat_id, image.filename, content_type_for(image_ext), image_data,
+        )
+    if document is not None:
+        document_data = await document.read()
+        document_ext = validate_upload(document.filename, document_data, DOCUMENT_EXTENSIONS)
+        document_meta = await run_in_threadpool(
+            create_attachment_db, chat_id, document.filename, content_type_for(document_ext), document_data,
+        )
+    pending_attachment_ids = [m["id"] for m in (image_meta, document_meta) if m is not None]
+
+    model_message = message
+    if document_data is not None:
+        document_text = extract_document_text(document_data, document_ext)
+        model_message = (
+            f"Attached document '{document.filename}':\n"
+            f"{document_text}\n\n"
+            f"User question: {message}"
+        )
+    user_created_at = now_iso()
+
+    async def _event_stream():
+        accumulated: list[str] = []
+        persisted = False
+        try:
+            t0 = time.perf_counter()
+            deltas = ask_chat_stream(model_message, effective_model, image_data)
+            while True:
+                try:
+                    # Each delta goes through the threadpool so a slow token never
+                    # blocks the event loop; None marks the end of the stream.
+                    delta = await run_in_threadpool(next, deltas, None)
+                except Exception as e:
+                    logger.exception("ask_chat_stream failed")
+                    yield _sse_event("error", {"detail": f"Error querying the model: {e}"})
+                    return
+                if delta is None:
+                    break
+                accumulated.append(delta)
+                yield _sse_event("delta", {"text": delta})
+            response = "".join(accumulated)
+            response_time_ms = int((time.perf_counter() - t0) * 1000)
+            if not response.strip():
+                yield _sse_event("error", {"detail": "Empty model response"})
+                return
+            try:
+                user_msg, assistant_msg = await run_in_threadpool(
+                    add_messages_db, chat_id, message, response, effective_model,
+                    response_time_ms, user_created_at, now_iso(),
+                )
+            except ValueError as e:
+                yield _sse_event("error", {"detail": str(e)})
+                return
+            persisted = True
+            if pending_attachment_ids:
+                await run_in_threadpool(link_attachments_to_message_db, pending_attachment_ids, user_msg["id"])
+                user_msg["attachments"] = [
+                    {k: m[k] for k in ("id", "filename", "content_type", "size")}
+                    for m in (image_meta, document_meta) if m is not None
+                ]
+            updated_chat = await run_in_threadpool(get_chat_db, chat_id)
+
+            # Optional TTS: synthesized once the text is complete and emitted inside
+            # the final done event. A TTS failure must not kill the (already streamed)
+            # text: messages stay persisted and the audio is regenerable on demand.
+            audio = None
+            tts_error = None
+            user_msg["audio"] = None
+            assistant_msg["audio"] = None
+            if tts:
+                try:
+                    audio = await _synthesize_and_store(
+                        chat_id, assistant_msg["id"], assistant_msg["content"], voice, voice_profile_id,
+                    )
+                    assistant_msg["audio"] = audio["audio"]
+                except HTTPException as e:
+                    tts_error = e.detail
+                    logger.warning("TTS failed during streaming: %s", tts_error)
+
+            yield _sse_event("done", {
+                "user_message": user_msg,
+                "assistant_message": assistant_msg,
+                "chat": updated_chat,
+                "audio_base64": audio["audio_base64"] if audio else None,
+                "mime_type": audio["mime_type"] if audio else None,
+                "sample_rate": audio["sample_rate"] if audio else None,
+                "tts_error": tts_error,
+            })
+        finally:
+            # Compensate pending attachments whenever the exchange did not persist
+            # (model failure, empty response or client disconnect mid-stream).
+            if not persisted:
+                await run_in_threadpool(delete_attachments_db, pending_attachment_ids)
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
 
 
 @router.get("/{chat_id}/attachments/{attachment_id}")

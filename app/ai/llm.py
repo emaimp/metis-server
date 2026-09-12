@@ -88,6 +88,24 @@ def ask_chat(
     )
 
 
+def ask_chat_stream(
+    message: str,
+    model: str | None = None,
+    image: bytes | None = None,
+):
+    effective = resolve_model(model)
+
+    messages = [
+        {'role': 'system', 'content': _language_instruction(LANGUAGE_CODE)},
+        {'role': 'user', 'content': message},
+    ]
+    return llamacpp.chat_stream(
+        model=effective,
+        messages=messages,
+        images=[image] if image is not None else None,
+    )
+
+
 def list_models() -> list[str]:
     """Return the model names available in the active server (GET /models)."""
     return llamacpp.list_models()

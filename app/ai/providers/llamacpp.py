@@ -1,5 +1,7 @@
 import base64
 import io
+import json
+from collections.abc import Iterator
 
 import requests
 
@@ -83,3 +85,51 @@ def list_models() -> list[str]:
         raise ConnectionError(f'Cannot connect to llama.cpp: {e}') from e
     except (ValueError, KeyError, TypeError) as e:
         raise RuntimeError(f'Unexpected response from llama.cpp: {e}') from e
+
+
+def chat_stream(
+    model: str,
+    messages: list[dict],
+    images: list[bytes] | None = None,
+) -> Iterator[str]:
+    """Yield incremental text deltas from a llama.cpp streaming chat (SSE).
+
+    Only ``choices[0].delta.content`` is emitted: ``reasoning_content`` deltas
+    are ignored (thinking behavior is managed server-side) and malformed chunks
+    are skipped. The stream ends at the ``data: [DONE]`` sentinel.
+    """
+    base_url = settings.LLAMA_CPP_BASE_URL
+    if not base_url:
+        raise ConnectionError('LLAMACPP_BASE_URL is not configured')
+
+    payload = {
+        'model': model,
+        'messages': _build_messages(messages, images),
+        'stream': True,
+    }
+    resp = None
+    try:
+        resp = requests.post(
+            f'{base_url}/chat/completions',
+            json=payload,
+            timeout=settings.LLAMA_CPP_TIMEOUT,
+            stream=True,
+        )
+        resp.raise_for_status()
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith('data:'):
+                continue
+            data = line[5:].strip()
+            if data == '[DONE]':
+                break
+            try:
+                delta = json.loads(data)['choices'][0].get('delta') or {}
+            except (ValueError, KeyError, IndexError, TypeError):
+                continue
+            if delta.get('content'):
+                yield delta['content']
+    except requests.RequestException as e:
+        raise ConnectionError(f'Cannot connect to llama.cpp: {e}') from e
+    finally:
+        if resp is not None:
+            resp.close()

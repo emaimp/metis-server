@@ -50,10 +50,15 @@ from app.schemas.chats import (
 from app.reads import extract_document_text
 from app.tools.run.categorize import categorize_file
 from app.tools.run.naming import rename_file
+from app.tools.run.search import format_search_context, search_web
 
 RENAME_MENTION_PATTERN = re.compile(r"@tool_rename\b", re.IGNORECASE)
 CATEGORIZE_MENTION_PATTERN = re.compile(r"@tool_categorize\b", re.IGNORECASE)
+SEARCH_MENTION_PATTERN = re.compile(r"@tool_search\b", re.IGNORECASE)
 UNKNOWN_TOOL_PATTERN = re.compile(r"@tool_(\w+)", re.IGNORECASE)
+
+# Tools whose output is not streamable: they are only valid on the blocking endpoint.
+ACTION_TOOLS = ("rename", "categorize")
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +241,7 @@ async def create_message(
 
     rename_requested = bool(RENAME_MENTION_PATTERN.search(message))
     categorize_requested = bool(CATEGORIZE_MENTION_PATTERN.search(message))
+    search_requested = bool(SEARCH_MENTION_PATTERN.search(message))
     unknown_mentions = UNKNOWN_TOOL_PATTERN.findall(message)
 
     # Read and validate optional uploads, and persist them BEFORE calling the model
@@ -267,7 +273,7 @@ async def create_message(
     # Validate tool mentions
     if unknown_mentions:
         bad_tool = next(
-            (m for m in unknown_mentions if m.lower() not in ("rename", "categorize")),
+            (m for m in unknown_mentions if m.lower() not in ("rename", "categorize", "search")),
             None,
         )
         if bad_tool is not None:
@@ -341,14 +347,33 @@ async def create_message(
     # Normal flow: ask the model. A document's text is extracted server-side and
     # embedded in the user message (same approach as the action tools); images
     # travel through the vision channel of the active provider (ask_chat).
-    model_message = message
+    # @tool_search: SearXNG results are fetched first and injected as numbered
+    # context so the answer is streamable/TTS-able like a normal chat message.
+    context_blocks: list[str] = []
+    if search_requested:
+        search_query = SEARCH_MENTION_PATTERN.sub("", message).strip() or message
+        try:
+            results = await run_in_threadpool(search_web, search_query)
+        except Exception as e:
+            logger.exception("search_web failed")
+            await _discard_pending_attachments()
+            raise HTTPException(status_code=502, detail=f"Error running the web search: {e}")
+        search_context = format_search_context(results)
+        context_blocks.append(
+            "Web search results for the user's question:\n\n"
+            f"{search_context}\n\n"
+            "Use the results above as the primary source. Cite the URLs you rely on. "
+            "If they do not contain enough information, say so explicitly instead "
+            "of inventing facts."
+        )
     if document_data is not None:
         document_text = extract_document_text(document_data, document_ext)
-        model_message = (
-            f"Attached document '{document.filename}':\n"
-            f"{document_text}\n\n"
-            f"User question: {message}"
-        )
+        context_blocks.append(f"Attached document '{document.filename}':\n{document_text}")
+    model_message = (
+        "\n\n".join(context_blocks) + f"\n\nUser question: {message}"
+        if context_blocks
+        else message
+    )
     t0 = time.perf_counter()
     try:
         response = await run_in_threadpool(
@@ -420,10 +445,12 @@ async def create_message_stream(
     """Stream a chat exchange as SSE events: `delta` (text), `done` (final payload), `error`.
 
     Same contract as `POST /{chat_id}/messages` for the normal chat flow, but the
-    model text is streamed chunk-by-chunk. Tool mentions are not supported here
-    (their JSON output is not streamable): use the blocking endpoint for tools.
-    With `tts=true`, the audio is synthesized once the text is complete and rides
-    inside the final `done` event; text-audio sync (pacing) is a client concern.
+    model text is streamed chunk-by-chunk. `@tool_search` IS supported: the
+    SearXNG results are fetched before the model call and injected as context.
+    Action tool mentions (@tool_rename / @tool_categorize) are not supported
+    here (their JSON output is not streamable). With `tts=true`, the audio is
+    synthesized once the text is complete and rides inside the final `done`
+    event; text-audio sync (pacing) is a client concern.
     """
     message = message.strip()
     if not message:
@@ -434,11 +461,16 @@ async def create_message_stream(
         effective_model = resolve_model(model)
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
-    if UNKNOWN_TOOL_PATTERN.search(message):
-        raise HTTPException(
-            status_code=400,
-            detail="Tool mentions are not supported by the streaming endpoint; use POST /chats/{chat_id}/messages",
-        )
+    # Only @tool_search is allowed on the streaming endpoint: its results are
+    # injected as context BEFORE the model call, so the answer streams normally.
+    # Action tools (@tool_rename / @tool_categorize) are not streamable.
+    mentioned_tools = UNKNOWN_TOOL_PATTERN.findall(message)
+    if mentioned_tools:
+        if any(m.lower() != "search" for m in mentioned_tools):
+            raise HTTPException(
+                status_code=400,
+                detail="Action tools are not supported by the streaming endpoint; use POST /chats/{chat_id}/messages",
+            )
 
     # Same upload validation/persistence as the blocking endpoint: attachments are
     # stored BEFORE the model call so a failure can compensate them afterwards.
@@ -462,14 +494,35 @@ async def create_message_stream(
         )
     pending_attachment_ids = [m["id"] for m in (image_meta, document_meta) if m is not None]
 
-    model_message = message
+    async def _discard_pending_attachments():
+        if pending_attachment_ids:
+            await run_in_threadpool(delete_attachments_db, pending_attachment_ids)
+
+    context_blocks: list[str] = []
+    if SEARCH_MENTION_PATTERN.search(message):
+        search_query = SEARCH_MENTION_PATTERN.sub("", message).strip() or message
+        try:
+            results = await run_in_threadpool(search_web, search_query)
+        except Exception as e:
+            logger.exception("search_web failed")
+            await _discard_pending_attachments()
+            raise HTTPException(status_code=502, detail=f"Error running the web search: {e}")
+        search_context = format_search_context(results)
+        context_blocks.append(
+            "Web search results for the user's question:\n\n"
+            f"{search_context}\n\n"
+            "Use the results above as the primary source. Cite the URLs you rely on. "
+            "If they do not contain enough information, say so explicitly instead "
+            "of inventing facts."
+        )
     if document_data is not None:
         document_text = extract_document_text(document_data, document_ext)
-        model_message = (
-            f"Attached document '{document.filename}':\n"
-            f"{document_text}\n\n"
-            f"User question: {message}"
-        )
+        context_blocks.append(f"Attached document '{document.filename}':\n{document_text}")
+    model_message = (
+        "\n\n".join(context_blocks) + f"\n\nUser question: {message}"
+        if context_blocks
+        else message
+    )
     user_created_at = now_iso()
 
     async def _event_stream():

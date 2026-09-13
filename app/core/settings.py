@@ -9,6 +9,18 @@ LLAMA_CPP_BASE_URL = os.getenv('LLAMACPP_BASE_URL', '').strip()
 # Timeout (seconds) for HTTP requests to the llama.cpp server.
 LLAMA_CPP_TIMEOUT = 180
 
+# SearXNG web search (local Docker instance).
+SEARXNG_BASE_URL = os.getenv('SEARXNG_BASE_URL', 'http://localhost:8888').strip()
+
+# Timeout (seconds) for HTTP requests to the SearXNG server.
+SEARXNG_TIMEOUT = 15
+
+# Maximum number of search results injected as context for the model.
+MAX_SEARCH_RESULTS = 5
+
+# Character cap applied to each search result snippet.
+SEARCH_SNIPPET_CHARS = 300
+
 # PIL image format names -> MIME, used to build data URIs for vision requests.
 IMAGE_FORMAT_TO_MIME = {
     'PNG': 'image/png',

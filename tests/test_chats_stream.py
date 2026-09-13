@@ -204,7 +204,60 @@ def test_message_stream_tool_mention_rejected(client):
         data={'message': '@tool_rename dale', 'model': 'm'},
     )
     assert resp.status_code == 400
-    assert 'streaming' in resp.json()['detail']
+
+
+def _fake_search_web(query, categories='general'):
+    return [
+        {'title': 'llama.cpp release', 'url': 'https://e.com/a', 'content': 'Novedades'},
+    ]
+
+
+def test_message_stream_search_tool_allowed(client, monkeypatch):
+    captured = {}
+
+    def _fake_stream(message, model=None, image=None):
+        captured['message'] = message
+        yield 'con búsqueda'
+
+    monkeypatch.setattr('app.routers.chats.ask_chat_stream', _fake_stream)
+    monkeypatch.setattr('app.routers.chats.search_web', _fake_search_web)
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages/stream",
+        data={'message': '@tool_search ¿qué es llama.cpp?', 'model': 'm'},
+    )
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    assert [e for e, _ in events] == ['delta', 'done']
+    done = events[-1][1]
+    assert done['user_message']['content'] == '@tool_search ¿qué es llama.cpp?'
+    assert done['assistant_message']['content'] == 'con búsqueda'
+    # Search results are injected as context before the model call
+    assert captured['message'].startswith('Web search results')
+    assert '[1] llama.cpp release' in captured['message']
+    assert '¿qué es llama.cpp?' in captured['message']
+    # Persisted like a normal exchange
+    detail = client.get(f"/chats/{chat['id']}").json()
+    assert [m['content'] for m in detail['messages']] == [
+        '@tool_search ¿qué es llama.cpp?', 'con búsqueda',
+    ]
+
+
+def test_message_stream_search_tool_failure(client, monkeypatch):
+    def _boom(query, categories='general'):
+        raise ConnectionError('cannot connect')
+
+    monkeypatch.setattr('app.routers.chats.search_web', _boom)
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages/stream",
+        data={'message': '@tool_search hola', 'model': 'm'},
+    )
+    # Pre-stream failure: plain HTTP 502, nothing streamed, nothing persisted
+    assert resp.status_code == 502
+    assert 'web search' in resp.json()['detail']
+    detail = client.get(f"/chats/{chat['id']}").json()
+    assert detail['messages'] == []
 
 
 def test_message_stream_requires_model(client, monkeypatch):

@@ -487,3 +487,98 @@ def test_create_message_mention_without_attachment(client):
     resp = client.post(f"/chats/{chat['id']}/messages", data={'message': '@tool_rename hola'})
     assert resp.status_code == 400
     assert resp.json()['detail'] == 'Tool mentions require an attached document or image'
+
+
+def _fake_search_web(query, categories='general'):
+    return [
+        {'title': 'llama.cpp release', 'url': 'https://e.com/a', 'content': 'Novedades'},
+        {'title': 'otra', 'url': 'https://e.com/b', 'content': 'snippet'},
+    ]
+
+
+def test_create_message_search_tool(client, monkeypatch):
+    captured = {}
+
+    def _fake_ask_chat(message, model=None, image=None):
+        captured['message'] = message
+        return 'Respuesta con búsqueda'
+
+    monkeypatch.setattr('app.routers.chats.ask_chat', _fake_ask_chat)
+    monkeypatch.setattr('app.routers.chats.search_web', _fake_search_web)
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages",
+        data={'message': '@tool_search ¿qué novedades hay en llama.cpp?'},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['assistant_message']['content'] == 'Respuesta con búsqueda'
+    # The user message is persisted as typed (mention included)
+    assert data['user_message']['content'] == '@tool_search ¿qué novedades hay en llama.cpp?'
+    # The model message embeds the numbered search context and the question
+    assert captured['message'].startswith('Web search results')
+    assert '[1] llama.cpp release' in captured['message']
+    assert 'URL: https://e.com/a' in captured['message']
+    assert '¿qué novedades hay en llama.cpp?' in captured['message']
+    # The exchange is persisted
+    detail = client.get(f"/chats/{chat['id']}").json()
+    assert [m['content'] for m in detail['messages']] == [
+        '@tool_search ¿qué novedades hay en llama.cpp?',
+        'Respuesta con búsqueda',
+    ]
+
+
+def test_create_message_search_tool_no_results(client, monkeypatch):
+    captured = {}
+
+    def _fake_ask_chat(message, model=None, image=None):
+        captured['message'] = message
+        return 'Sin resultados'
+
+    monkeypatch.setattr('app.routers.chats.ask_chat', _fake_ask_chat)
+    monkeypatch.setattr('app.routers.chats.search_web', lambda q, categories='general': [])
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages",
+        data={'message': '@tool_search algo muy raro'},
+    )
+    assert resp.status_code == 200
+    assert 'Web search returned no results.' in captured['message']
+
+
+def test_create_message_search_tool_failure(client, monkeypatch):
+    def _boom(query, categories='general'):
+        raise ConnectionError('cannot connect')
+
+    monkeypatch.setattr('app.routers.chats.search_web', _boom)
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages",
+        data={'message': '@tool_search hola'},
+    )
+    assert resp.status_code == 502
+    assert 'web search' in resp.json()['detail']
+    # Nothing is persisted when the search fails
+    detail = client.get(f"/chats/{chat['id']}").json()
+    assert detail['messages'] == []
+
+
+def test_create_message_search_tool_with_document(client, monkeypatch):
+    captured = {}
+
+    def _fake_ask_chat(message, model=None, image=None):
+        captured['message'] = message
+        return 'ok'
+
+    monkeypatch.setattr('app.routers.chats.ask_chat', _fake_ask_chat)
+    monkeypatch.setattr('app.routers.chats.search_web', _fake_search_web)
+    chat = _create_chat(client)
+    resp = client.post(
+        f"/chats/{chat['id']}/messages",
+        data={'message': '@tool_search compara esto'},
+        files={'document': ('doc.txt', b'contenido del documento', 'text/plain')},
+    )
+    assert resp.status_code == 200
+    # Both contexts are embedded: search results AND the attached document
+    assert '[1] llama.cpp release' in captured['message']
+    assert 'contenido del documento' in captured['message']
